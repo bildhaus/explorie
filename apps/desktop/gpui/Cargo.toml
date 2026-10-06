@@ -42,7 +42,7 @@ unicode-segmentation = "1.12"
 drag = "2.1.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "=0.26.0"
+cocoa = "=0.27.0"
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "76659a55a8c10ed355a070f8764a0b1733e3c115", features = ["font-kit"] }
 libc = "0.2"
 objc = "0.2"
