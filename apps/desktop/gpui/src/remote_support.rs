@@ -140,6 +140,10 @@ pub(crate) fn remote_profile_detail(
         }
     }
     if let Some(error) = status.error.as_ref() {
+        // Waiting for approval already says what to allow and where.
+        if status.state == RemoteDriveState::ApprovalRequired {
+            return error.message.clone();
+        }
         return format!("{} • {}", error.message, remote_error_guidance(error));
     }
     format!(
@@ -165,6 +169,18 @@ impl RemoteEditorField {
             Self::Remote => "rclone remote",
             Self::RemotePath => "Subpath (optional)",
             Self::MountTarget if platform == Some("windows") => "Drive letter (D:–Z:)",
+            Self::MountTarget => "Volume name",
+        }
+    }
+
+    /// The hint shown in the empty field for this step.
+    pub(crate) fn placeholder(self, platform: Option<&str>) -> &'static str {
+        match self {
+            Self::Name => "My NAS",
+            Self::Remote => "Remote name from rclone config",
+            Self::RemotePath => "Optional folder inside the remote",
+            Self::MountTarget if platform == Some("windows") => "D:",
+            Self::MountTarget if platform == Some("macos") => "Name shown in Finder",
             Self::MountTarget => "Volume name",
         }
     }

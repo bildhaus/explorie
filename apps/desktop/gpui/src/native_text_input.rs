@@ -154,6 +154,11 @@ impl NativeTextInput {
         &self.content
     }
 
+    #[cfg(test)]
+    pub fn placeholder(&self) -> &str {
+        &self.placeholder
+    }
+
     pub fn set_content(&mut self, content: impl Into<String>, cx: &mut Context<Self>) {
         let content = single_line(content.into());
         let cursor = content.len();
@@ -451,12 +456,19 @@ impl NativeTextInput {
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
+        // An empty field lays out its placeholder; an offset into that text
+        // would put the cursor past the end of the (empty) content, and the
+        // next keystroke would slice out of bounds.
+        if self.content.is_empty() {
+            return 0;
+        }
         let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
         else {
             return 0;
         };
         let display_index = line.closest_index_for_x(position.x - bounds.left() + self.scroll_x);
         self.display_offset_to_content(display_index)
+            .min(self.content.len())
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {

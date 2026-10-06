@@ -368,6 +368,12 @@ struct FakeRemoteState {
     quit_requested: bool,
     fail_unmount: bool,
     fail_quit: bool,
+    /// The helper status to report instead of "enabled" (macOS).
+    helper: Option<String>,
+    /// What registering the helper changes its status to; `None` fails.
+    helper_after_register: Option<String>,
+    helper_registrations: usize,
+    helper_settings_opened: usize,
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -436,7 +442,14 @@ impl RemoteDriveBackend for FakeRemoteBackend {
 
     fn helper_status(&self) -> Option<String> {
         #[cfg(target_os = "macos")]
-        return Some("enabled".into());
+        return Some(
+            self.state
+                .lock()
+                .unwrap()
+                .helper
+                .clone()
+                .unwrap_or_else(|| "enabled".into()),
+        );
         #[cfg(not(target_os = "macos"))]
         None
     }
@@ -506,7 +519,21 @@ impl RemoteDriveBackend for FakeRemoteBackend {
     }
 
     fn register_helper(&self) -> ServiceResult<String> {
-        Ok("enabled".into())
+        let mut state = self.state.lock().unwrap();
+        state.helper_registrations += 1;
+        if state.helper.is_none() {
+            return Ok("enabled".into());
+        }
+        match state.helper_after_register.clone() {
+            Some(after) => {
+                state.helper = Some(after.clone());
+                Ok(after)
+            }
+            None => Err(ServiceError::new(
+                explorie_native_services::ErrorCode::HelperMissing,
+                "Unable to install the Remote Drives helper: Operation not permitted",
+            )),
+        }
     }
 
     fn unregister_helper(&self) -> ServiceResult<()> {
@@ -514,6 +541,7 @@ impl RemoteDriveBackend for FakeRemoteBackend {
     }
 
     fn open_helper_settings(&self) -> ServiceResult<()> {
+        self.state.lock().unwrap().helper_settings_opened += 1;
         Ok(())
     }
 }
@@ -584,6 +612,118 @@ fn injected_remote_backend_drives_connect_exit_blocker_and_disconnect() {
         backend.state.lock().unwrap().last_volume_name.as_deref(),
         Some(_mount_target.as_str())
     );
+}
+
+#[cfg(target_os = "macos")]
+fn helper_test_profile() -> RemoteDriveProfile {
+    RemoteDriveProfile {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: "Remote".into(),
+        remote: "remote".into(),
+        remote_path: String::new(),
+        mount_target: unused_mount_target(),
+    }
+}
+
+/// On a fresh install the helper is not registered yet. Connecting must
+/// register it (that is what makes macOS list it under Login Items) and say
+/// what to approve, instead of reporting "approval required" with nothing
+/// for the user to approve.
+#[cfg(target_os = "macos")]
+#[test]
+fn connecting_installs_a_missing_helper_and_says_what_to_approve() {
+    use explorie_native_services::{HELPER_APPROVAL_MESSAGE, RemoteDriveState};
+    let temp = tempfile::tempdir().unwrap();
+    let backend = Arc::new(FakeRemoteBackend::default());
+    {
+        let mut state = backend.state.lock().unwrap();
+        state.helper = Some("not-registered".into());
+        state.helper_after_register = Some("approval-required".into());
+    }
+    let native = NativeServices::with_remote_backend(
+        ResourcePaths::test(temp.path()),
+        Arc::clone(&backend) as Arc<dyn RemoteDriveBackend>,
+    );
+    let profile = helper_test_profile();
+
+    let waiting = native.remotes.connect(profile.clone()).wait().unwrap();
+    assert_eq!(waiting.state, RemoteDriveState::ApprovalRequired);
+    assert_eq!(
+        waiting.error.as_ref().unwrap().message,
+        HELPER_APPROVAL_MESSAGE
+    );
+    {
+        let state = backend.state.lock().unwrap();
+        assert_eq!(state.helper_registrations, 1);
+        assert_eq!(state.helper_settings_opened, 1);
+        assert_eq!(state.started, 0, "nothing mounts before approval");
+    }
+
+    // Once the user allows it, connecting goes through.
+    backend.state.lock().unwrap().helper = Some("enabled".into());
+    let connected = native.remotes.connect(profile).wait().unwrap();
+    assert_eq!(connected.state, RemoteDriveState::Connected);
+    assert_eq!(backend.state.lock().unwrap().helper_registrations, 1);
+    native.remotes.disconnect_all().wait().unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_helper_that_cannot_be_installed_is_reported_as_missing() {
+    use explorie_native_services::RemoteDriveState;
+    let temp = tempfile::tempdir().unwrap();
+    let backend = Arc::new(FakeRemoteBackend::default());
+    backend.state.lock().unwrap().helper = Some("not-registered".into());
+    let native = NativeServices::with_remote_backend(
+        ResourcePaths::test(temp.path()),
+        Arc::clone(&backend) as Arc<dyn RemoteDriveBackend>,
+    );
+
+    let missing = native
+        .remotes
+        .connect(helper_test_profile())
+        .wait()
+        .unwrap();
+    assert_eq!(missing.state, RemoteDriveState::HelperMissing);
+    assert!(
+        missing
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("Operation not permitted"),
+        "{:?}",
+        missing.error
+    );
+    let state = backend.state.lock().unwrap();
+    assert_eq!(state.helper_settings_opened, 0);
+    assert_eq!(state.started, 0);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_helper_enabled_by_registering_connects_right_away() {
+    use explorie_native_services::RemoteDriveState;
+    let temp = tempfile::tempdir().unwrap();
+    let backend = Arc::new(FakeRemoteBackend::default());
+    {
+        let mut state = backend.state.lock().unwrap();
+        state.helper = Some("not-registered".into());
+        state.helper_after_register = Some("enabled".into());
+    }
+    let native = NativeServices::with_remote_backend(
+        ResourcePaths::test(temp.path()),
+        Arc::clone(&backend) as Arc<dyn RemoteDriveBackend>,
+    );
+
+    let connected = native
+        .remotes
+        .connect(helper_test_profile())
+        .wait()
+        .unwrap();
+    assert_eq!(connected.state, RemoteDriveState::Connected);
+    assert_eq!(backend.state.lock().unwrap().helper_settings_opened, 0);
+    native.remotes.disconnect_all().wait().unwrap();
 }
 
 #[cfg(any(windows, target_os = "macos"))]

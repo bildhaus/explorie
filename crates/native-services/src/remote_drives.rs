@@ -30,6 +30,9 @@ const RCLONE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const RCLONE_LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RCLONE_OUTPUT: usize = 1024 * 1024;
 
+/// What to do when macOS has the mount helper but waits for the user.
+pub const HELPER_APPROVAL_MESSAGE: &str = "Allow Explorie in System Settings › General › Login Items & Extensions, under “Allow in the Background”, then connect again.";
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteDriveProfile {
@@ -56,6 +59,10 @@ pub struct RemoteDriveEnvironment {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RemoteDriveState {
+    /// The macOS mount helper is not installed and could not be installed.
+    HelperMissing,
+    /// The macOS mount helper is installed but waits for the user to allow
+    /// it in System Settings.
     ApprovalRequired,
     Connecting,
     Connected,
@@ -67,6 +74,7 @@ pub enum RemoteDriveState {
 impl RemoteDriveState {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::HelperMissing => "helper-missing",
             Self::ApprovalRequired => "approval-required",
             Self::Connecting => "connecting",
             Self::Connected => "connected",
@@ -457,10 +465,9 @@ impl RemoteDriveService {
         let _guard = ActiveOperation::new(Arc::clone(&self.shared));
         validate_remote_drive_profile(&profile)?;
         #[cfg(target_os = "macos")]
-        if self.backend.helper_status().as_deref() != Some("enabled") {
-            let approval = status(&profile.id, RemoteDriveState::ApprovalRequired, None, None);
-            self.publish_status(approval.clone());
-            return Ok(approval);
+        if let Some(waiting) = self.prepare_helper(&profile.id) {
+            self.publish_status(waiting.clone());
+            return Ok(waiting);
         }
 
         {
@@ -875,6 +882,56 @@ impl RemoteDriveService {
             let _guard = ActiveOperation::new(Arc::clone(&service.shared));
             service.backend.install_winfsp(&service.context)
         })
+    }
+
+    /// Makes sure the macOS mount helper can serve a connect, installing it
+    /// on first use. Returns the status to report when it cannot yet.
+    ///
+    /// Registering is what makes macOS list the helper under Login Items, so
+    /// it has to happen before the user can approve it; connecting without
+    /// it used to report "approval required" with nothing to approve.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn prepare_helper(&self, id: &str) -> Option<RemoteDriveStatus> {
+        let mut helper = self.backend.helper_status();
+        if helper.as_deref() != Some("enabled") {
+            // Also re-registers a registration still waiting for approval:
+            // the macOS bridge refreshes it from this copy of the app.
+            match self.backend.register_helper() {
+                Ok(registered) => helper = Some(registered),
+                Err(error) => {
+                    return Some(status(
+                        id,
+                        RemoteDriveState::HelperMissing,
+                        None,
+                        Some(error),
+                    ));
+                }
+            }
+        }
+        match helper.as_deref() {
+            Some("enabled") => None,
+            Some("approval-required") => {
+                let _ = self.backend.open_helper_settings();
+                Some(status(
+                    id,
+                    RemoteDriveState::ApprovalRequired,
+                    None,
+                    Some(ServiceError::new(
+                        ErrorCode::HelperMissing,
+                        HELPER_APPROVAL_MESSAGE,
+                    )),
+                ))
+            }
+            _ => Some(status(
+                id,
+                RemoteDriveState::HelperMissing,
+                None,
+                Some(ServiceError::new(
+                    ErrorCode::HelperMissing,
+                    "The Remote Drives helper is not available. Reinstall Explorie from its disk image into Applications, then connect again.",
+                )),
+            )),
+        }
     }
 
     pub fn register_helper(&self) -> BlockingTask<String> {
@@ -1791,7 +1848,7 @@ mod macos {
 
     unsafe extern "C" {
         fn explorie_mount_helper_status() -> i32;
-        fn explorie_mount_helper_register() -> i32;
+        fn explorie_mount_helper_register(error: *mut *mut c_char) -> i32;
         fn explorie_mount_helper_unregister() -> i32;
         fn explorie_mount_helper_open_settings();
         fn explorie_mount_helper_mount(
@@ -1818,10 +1875,23 @@ mod macos {
     }
 
     pub fn register() -> Result<String, String> {
-        match unsafe { explorie_mount_helper_register() } {
+        let mut error: *mut c_char = std::ptr::null_mut();
+        match unsafe { explorie_mount_helper_register(&mut error) } {
             1 => Ok("enabled".to_string()),
             2 => Ok("approval-required".to_string()),
-            _ => Err("Unable to register the Remote Drives helper.".to_string()),
+            _ => {
+                let reason = (!error.is_null()).then(|| {
+                    let message = unsafe { CStr::from_ptr(error) }
+                        .to_string_lossy()
+                        .into_owned();
+                    unsafe { explorie_mount_helper_free(error) };
+                    message
+                });
+                Err(match reason {
+                    Some(reason) => format!("Unable to install the Remote Drives helper: {reason}"),
+                    None => "Unable to install the Remote Drives helper.".to_string(),
+                })
+            }
         }
     }
 
