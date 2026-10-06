@@ -148,3 +148,32 @@ test('first-release mode still rejects stale version, tag, artifact, and digest'
   assert.match(result.stderr, /windows: artifact must be explorie-0.0.1/);
   assert.match(result.stderr, /macos: sha256 must be/);
 });
+
+test('macOS folder integration may be not applicable only with a recorded reason', async (t) => {
+  const { proof, verify } = await fixture(t, '0.3.2', 'https://github.com/bildhaus/explorie');
+  for (const check of ['folderIntegrationEnabled', 'folderIntegrationDisabled']) {
+    proof.macos.checks[check] = 'not-applicable';
+  }
+  let result = await verify();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /macos: folderIntegrationEnabled was not attested/);
+
+  proof.macos.folderIntegrationUnavailable = '   ';
+  result = await verify();
+  assert.notEqual(result.status, 0);
+
+  proof.macos.folderIntegrationUnavailable = 'macOS 26.6 refuses folder-handler changes; Settings shows why.';
+  result = await verify();
+  assert.equal(result.status, 0, result.stderr);
+
+  // Windows folder integration is always required, and no other macOS check
+  // can be waived this way.
+  proof.windows.folderIntegrationUnavailable = 'not on Windows';
+  proof.windows.checks.folderIntegrationEnabled = 'not-applicable';
+  result = await verify();
+  assert.match(result.stderr, /windows: folderIntegrationEnabled was not attested/);
+  proof.windows.checks.folderIntegrationEnabled = true;
+  proof.macos.checks.crashRestore = 'not-applicable';
+  result = await verify();
+  assert.match(result.stderr, /macos: crashRestore was not attested/);
+});

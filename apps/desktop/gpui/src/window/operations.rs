@@ -475,21 +475,41 @@ impl DirectoryWindow {
                 return;
             }
         };
-        let kind = match clipboard.kind {
-            ClipboardKind::Copy => FileOperationKind::Copy,
-            ClipboardKind::Cut => FileOperationKind::Move,
+        let destination = crate::window::drag_drop::operation_destination(self.browser.path());
+        // Items pasted into the folder they came from: as in Finder and
+        // Explorer, copies become duplicates ("note copy.txt") without
+        // asking, and a cut has nothing to move.
+        let (in_place, elsewhere): (Vec<_>, Vec<_>) =
+            clipboard.paths.into_iter().partition(|path| {
+                path.parent()
+                    .is_some_and(|parent| explorie_core::same_directory(parent, &destination))
+            });
+        let (kind, in_place_policy) = match clipboard.kind {
+            ClipboardKind::Copy => (FileOperationKind::Copy, Some(ConflictPolicy::Duplicate)),
+            ClipboardKind::Cut => (FileOperationKind::Move, None),
         };
-        self.start_file_operation(
-            FileOperationRequest {
-                kind,
-                sources: clipboard.paths,
-                destination: Some(crate::window::drag_drop::operation_destination(
-                    self.browser.path(),
-                )),
-                conflict_policy: self.operation_ui.conflict_policy,
-            },
-            cx,
-        );
+        if elsewhere.is_empty() && in_place_policy.is_none() {
+            self.status_message = Some("The items are already in this folder".to_string());
+            cx.notify();
+            return;
+        }
+        for (sources, conflict_policy) in [
+            (in_place, in_place_policy),
+            (elsewhere, Some(self.operation_ui.conflict_policy)),
+        ] {
+            let Some(conflict_policy) = conflict_policy.filter(|_| !sources.is_empty()) else {
+                continue;
+            };
+            self.start_file_operation(
+                FileOperationRequest {
+                    kind,
+                    sources,
+                    destination: Some(destination.clone()),
+                    conflict_policy,
+                },
+                cx,
+            );
+        }
     }
 
     /// After a move completes, empty the system clipboard if it still holds
@@ -841,7 +861,9 @@ impl DirectoryWindow {
         self.operation_ui.conflict_policy = match self.operation_ui.conflict_policy {
             ConflictPolicy::Error => ConflictPolicy::Rename,
             ConflictPolicy::Rename => ConflictPolicy::Replace,
-            ConflictPolicy::Replace => ConflictPolicy::Error,
+            // Duplicate is only for pasting into the source folder; it is
+            // never the chosen policy, but cycle back to asking if it is.
+            ConflictPolicy::Replace | ConflictPolicy::Duplicate => ConflictPolicy::Error,
         };
         cx.notify();
     }

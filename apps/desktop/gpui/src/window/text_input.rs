@@ -279,11 +279,23 @@ impl DirectoryWindow {
                 false,
             ))
         } else if control_input_needed {
+            let platform = self
+                .remote
+                .environment
+                .as_ref()
+                .map(|environment| environment.platform.as_str());
+            let (placeholder, label) = match (self.overlay.surface, self.remote.editor.as_ref()) {
+                (ControlSurface::RemoteDrives, Some(editor)) => (
+                    editor.field.placeholder(platform),
+                    editor.field.label(platform),
+                ),
+                _ => ("Type to filter…", "Filter or edit value"),
+            };
             Some((
                 TextInputTarget::ControlQuery,
                 self.overlay.query.clone(),
-                "Type to filter…",
-                "Filter or edit value",
+                placeholder,
+                label,
                 false,
                 false,
             ))

@@ -318,9 +318,14 @@ impl DirectoryWindow {
                     .drag_over::<ExternalPaths>(move |style, _, _, _| {
                         style.border_color(palette.accent).bg(palette.selected)
                     })
-                    .on_drop(cx.listener(move |this, paths: &ExternalPaths, _, cx| {
+                    .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
                         cx.stop_propagation();
-                        this.drop_external_paths_to(paths, external_drop_path.clone(), cx);
+                        this.drop_external_paths_to(
+                            paths,
+                            external_drop_path.clone(),
+                            window.modifiers(),
+                            cx,
+                        );
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.activate_tab(id, cx);
@@ -527,9 +532,14 @@ impl DirectoryWindow {
                                 .border_color(drag_palette.accent)
                                 .bg(drag_palette.selected)
                         })
-                        .on_drop(cx.listener(move |this, paths: &ExternalPaths, _, cx| {
+                        .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
                             cx.stop_propagation();
-                            this.drop_external_paths_to(paths, external_file_drop_path.clone(), cx);
+                            this.drop_external_paths_to(
+                                paths,
+                                external_file_drop_path.clone(),
+                                window.modifiers(),
+                                cx,
+                            );
                         }))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.navigate_to(navigation_path.clone(), cx);
@@ -619,9 +629,14 @@ impl DirectoryWindow {
                         .drag_over::<ExternalPaths>(move |style, _, _, _| {
                             style.border_color(palette.accent).bg(palette.selected)
                         })
-                        .on_drop(cx.listener(move |this, paths: &ExternalPaths, _, cx| {
+                        .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
                             cx.stop_propagation();
-                            this.drop_external_paths_to(paths, external_drop_path.clone(), cx);
+                            this.drop_external_paths_to(
+                                paths,
+                                external_drop_path.clone(),
+                                window.modifiers(),
+                                cx,
+                            );
                         }))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.navigate_to(click_path.clone(), cx);
@@ -778,9 +793,14 @@ impl DirectoryWindow {
                         .drag_over::<ExternalPaths>(move |style, _, _, _| {
                             style.border_color(palette.accent).bg(palette.selected)
                         })
-                        .on_drop(cx.listener(move |this, paths: &ExternalPaths, _, cx| {
+                        .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
                             cx.stop_propagation();
-                            this.drop_external_paths_to(paths, external_drop_path.clone(), cx);
+                            this.drop_external_paths_to(
+                                paths,
+                                external_drop_path.clone(),
+                                window.modifiers(),
+                                cx,
+                            );
                         }))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.navigate_to(click_path.clone(), cx);

@@ -675,6 +675,11 @@ impl DirectoryWindow {
                                 status.enabled = false;
                             }
                             view.rebuild_plugin_decorations();
+                        } else if !view.settings.integrations_onboarding_complete {
+                            // Enabling an integration is the choice the
+                            // invitation asks for, so it stops asking.
+                            view.settings.integrations_onboarding_complete = true;
+                            view.persist_settings();
                         }
                         let task = view
                             .services
@@ -1059,6 +1064,43 @@ mod tests {
         });
         window.run_until_parked();
         assert!(window.debug_bounds("integrations-invitation").is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[gpui::test]
+    fn enabling_one_integration_dismisses_the_invitation(cx: &mut TestAppContext) {
+        let (root, services) = test_services();
+        let mut statuses = services.plugins.list().wait().unwrap();
+        for status in &mut statuses {
+            status.source = PluginSource::Bundled;
+            status.installed = true;
+        }
+        let (view, window) = cx.add_window_view(|_, cx| {
+            let mut view = DirectoryWindow::new(root.clone(), services.clone(), cx);
+            view.plugin_ui.statuses = statuses;
+            view
+        });
+        window.simulate_resize(gpui::size(px(1000.0), px(720.0)));
+        window.run_until_parked();
+        assert!(window.debug_bounds("integrations-invitation").is_some());
+        view.update(window, |view, cx| {
+            view.settings_ui.panel_open = true;
+            view.settings_ui.tab = SettingsTab::Plugins;
+            cx.notify();
+        });
+        window.run_until_parked();
+        let enable = window.debug_bounds("plugin-enable-git").unwrap().center();
+        window.simulate_click(enable, gpui::Modifiers::default());
+        window.run_until_parked();
+        view.update(window, |view, cx| {
+            assert!(view.settings.integrations_onboarding_complete);
+            view.settings_ui.panel_open = false;
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert!(window.debug_bounds("integrations-invitation").is_none());
+        view.update(window, |view, _| view.plugin_ui.statuses.clear());
+        services.plugins.shutdown().wait().unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 

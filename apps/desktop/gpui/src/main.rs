@@ -3,6 +3,8 @@
 // desktop imports below are unused there by design.
 #![cfg_attr(not(any(windows, target_os = "macos")), allow(unused_imports))]
 
+#[cfg(any(windows, target_os = "macos"))]
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 
@@ -83,9 +85,7 @@ fn main() {
     let plugin_startup_error =
         explorie_gpui::initialize_plugins(&services, std::env::args_os()).err();
     let single_instance_requests = Arc::new(Mutex::new(instance.requests));
-    let path = explicit_path
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
+    let path = explicit_path.unwrap_or_else(default_startup_path);
     let recovery_marker = RecoveryMarker::begin(&services.resources().config_dir)
         .map_err(|error| eprintln!("native recovery tracking unavailable: {error}"))
         .ok();
@@ -451,6 +451,30 @@ mod tests {
     }
 }
 
+/// Where the first window opens without a path argument: the working
+/// directory when started from a terminal, otherwise the home folder, as in
+/// Finder. Apps launched from the Dock, Finder or Explorer get `/` or their
+/// own install folder as the working directory, which is never what the user
+/// wants to see first.
+#[cfg(any(windows, target_os = "macos"))]
+fn default_startup_path() -> PathBuf {
+    startup_path_for(
+        std::io::stdin().is_terminal(),
+        std::env::current_dir().ok(),
+        dirs::home_dir(),
+    )
+}
+
+#[cfg(any(test, windows, target_os = "macos"))]
+fn startup_path_for(
+    from_terminal: bool,
+    current_dir: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    let terminal_dir = current_dir.filter(|_| from_terminal);
+    terminal_dir.or(home).unwrap_or_else(|| PathBuf::from("."))
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 fn native_services() -> NativeServices {
     let resources = ResourcePaths::default().with_app_version(env!("CARGO_PKG_VERSION"));
@@ -468,4 +492,31 @@ fn native_services() -> NativeServices {
 #[cfg(not(any(windows, target_os = "macos")))]
 fn main() {
     eprintln!("{APP_NAME} has no Linux product target");
+}
+
+#[cfg(test)]
+mod startup_path_tests {
+    use super::*;
+
+    #[test]
+    fn the_first_window_opens_home_unless_started_from_a_terminal() {
+        let home = Some(PathBuf::from("/Users/someone"));
+        let root = Some(PathBuf::from("/"));
+        // Dock, Finder and Explorer launches get "/" or the install folder.
+        assert_eq!(
+            startup_path_for(false, root.clone(), home.clone()),
+            PathBuf::from("/Users/someone")
+        );
+        // A terminal launch opens where the user is.
+        let project = Some(PathBuf::from("/Users/someone/project"));
+        assert_eq!(
+            startup_path_for(true, project, home.clone()),
+            PathBuf::from("/Users/someone/project")
+        );
+        assert_eq!(
+            startup_path_for(true, None, home),
+            PathBuf::from("/Users/someone")
+        );
+        assert_eq!(startup_path_for(false, root, None), PathBuf::from("."));
+    }
 }

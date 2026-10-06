@@ -4213,8 +4213,9 @@ mod tests {
             Err(macos::NativeImageError::Cancelled)
         );
 
-        // The generator keeps working after abandoned requests.
-        macos::quicklook_thumbnail(&pdf, 256, QUICKLOOK_THUMBNAIL_TIMEOUT, &output, None).unwrap();
+        // The generator keeps working after abandoned requests. A busy test
+        // machine can take longer than the production timeout to render it.
+        macos::quicklook_thumbnail(&pdf, 256, Duration::from_secs(60), &output, None).unwrap();
         assert_png_within(&output, 256);
 
         let unsupported = temp.path().join("server.key");

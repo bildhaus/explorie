@@ -2269,6 +2269,13 @@ impl DirectoryWindow {
         };
         let folder_handler_state = if let Some(error) = self.system.integration_error.as_deref() {
             format!("{integration_platform} integration could not be read: {error}")
+        } else if let Some(reason) = self
+            .system
+            .integration_status
+            .as_ref()
+            .and_then(|status| status.unavailable_reason.as_deref())
+        {
+            reason.to_string()
         } else if self
             .system
             .integration_status

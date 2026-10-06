@@ -337,10 +337,19 @@ impl DirectoryWindow {
                 match remotes.connect(profile.clone()).await {
                     Ok(status) => {
                         let connected = status.state == RemoteDriveState::Connected;
+                        let helper_not_ready = matches!(
+                            status.state,
+                            RemoteDriveState::HelperMissing | RemoteDriveState::ApprovalRequired
+                        );
                         let applied = this
                             .update(cx, |view, cx| {
                                 if !view.remote_connect_is_current(&id, generation) {
                                     return false;
+                                }
+                                if helper_not_ready {
+                                    // Connecting may have just installed the
+                                    // helper; show its new state.
+                                    view.refresh_remote_environment(cx);
                                 }
                                 view.remote.statuses.insert(id.clone(), status);
                                 view.remote.retries.remove(&id);
@@ -739,13 +748,12 @@ impl DirectoryWindow {
             let _ = this.update(cx, |view, cx| {
                 match result {
                     Ok(Some(status)) if status == "approval-required" => {
-                        view.remote.setup_error = Some(
-                            "Approve the Explorie mount helper in System Settings".to_string(),
-                        );
+                        // The helper row then shows what to allow.
                         let remotes = view.services.remotes.clone();
                         view.push_remote_task(cx.spawn(async move |_, _| {
                             let _ = remotes.open_helper_settings().await;
                         }));
+                        view.refresh_remote_environment(cx);
                     }
                     Ok(_) => view.refresh_remote_environment(cx),
                     Err(error) => {
@@ -1131,7 +1139,13 @@ impl DirectoryWindow {
                         .items_center()
                         .gap_3()
                         .child(div().w(px(140.0)).text_sm().child(label))
-                        .child(div().flex_1().children(control_input))
+                        .child(
+                            div()
+                                .id("remote-profile-editor-field")
+                                .debug_selector(|| "remote-profile-editor-field".to_string())
+                                .flex_1()
+                                .children(control_input),
+                        )
                         .child(
                             toolbar_button(
                                 "commit-remote-profile-field",
@@ -1236,7 +1250,7 @@ impl DirectoryWindow {
                 .py_2()
                 .border_b_1()
                 .border_color(rgb(0xe08a3e))
-                .child(div().flex_1().text_sm().child(error))
+                .child(div().flex_1().min_w_0().text_sm().child(error))
                 .child(
                     toolbar_button("retry-remote-setup", "Retry", self.palette.control).on_click(
                         cx.listener(|this, _, _, cx| this.refresh_remote_environment(cx)),
@@ -1244,10 +1258,8 @@ impl DirectoryWindow {
                 )
                 .when(
                     self.remote.environment.as_ref().is_some_and(|environment| {
-                        (environment.platform == "windows"
-                            && environment.winfsp_available == Some(false))
-                            || (environment.platform == "macos"
-                                && environment.helper_status.as_deref() != Some("enabled"))
+                        environment.platform == "windows"
+                            && environment.winfsp_available == Some(false)
                     }),
                     |row| {
                         row.child(
@@ -1262,6 +1274,51 @@ impl DirectoryWindow {
                 )
                 .into_any_element()
         });
+        // On macOS remote drives mount through a privileged helper the user
+        // has to allow; say so whenever it is not ready, not only after an
+        // error, and offer the step that gets it ready.
+        let helper_setup = self
+            .remote
+            .environment
+            .as_ref()
+            .filter(|environment| {
+                environment.platform == "macos"
+                    && environment.helper_status.as_deref() != Some("enabled")
+            })
+            .map(|environment| {
+                let waiting = environment.helper_status.as_deref() == Some("approval-required");
+                let (message, action) = if waiting {
+                    (HELPER_APPROVAL_MESSAGE, "Open Login Items")
+                } else {
+                    (
+                        "Remote drives need Explorie's mount helper. Install it, then allow it when macOS asks.",
+                        "Install helper",
+                    )
+                };
+                div()
+                    .id("remote-helper-setup")
+                    .debug_selector(|| "remote-helper-setup".to_string())
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_4()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(rgb(0xe08a3e))
+                    .child(div().flex_1().min_w_0().text_sm().child(message))
+                    .child(
+                        toolbar_button("install-remote-helper", action, self.palette.control)
+                            .debug_selector(|| "install-remote-helper".to_string())
+                            .on_click(cx.listener(|this, _, _, cx| this.install_remote_helper(cx))),
+                    )
+                    .child(
+                        toolbar_button("recheck-remote-helper", "Check again", self.palette.control)
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.refresh_remote_environment(cx)),
+                            ),
+                    )
+                    .into_any_element()
+            });
         div()
             .id("remote-drive-manager")
             .debug_selector(|| "remote-drive-manager".to_string())
@@ -1324,6 +1381,7 @@ impl DirectoryWindow {
             .children(exit_blocker)
             .children(blocked)
             .children(setup)
+            .children(helper_setup)
             .child(
                 div()
                     .id("remote-profile-results")

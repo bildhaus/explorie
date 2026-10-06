@@ -7986,6 +7986,44 @@ fn operation_history_is_a_bounded_floating_panel_with_minimize_and_close(cx: &mu
     remove_fixture(&directory);
 }
 
+#[test]
+fn new_windows_cascade_from_the_window_they_open_from() {
+    let display = gpui::Bounds::new(
+        gpui::point(px(0.0), px(0.0)),
+        gpui::size(px(1728.0), px(1117.0)),
+    );
+    let centered = gpui::Bounds::new(
+        gpui::point(px(352.0), px(174.0)),
+        gpui::size(px(1024.0), px(768.0)),
+    );
+    let from = |x: f32, y: f32| WorkspaceWindowState {
+        width: Some(1024.0),
+        height: Some(768.0),
+        x: Some(x),
+        y: Some(y),
+    };
+    // Down and to the right of the window it came from, like Finder.
+    let next = cascaded_window_bounds(from(516.0, 300.0), centered, &[display]);
+    assert_eq!(
+        (f32::from(next.origin.x), f32::from(next.origin.y)),
+        (516.0 + NEW_WINDOW_CASCADE, 300.0 + NEW_WINDOW_CASCADE)
+    );
+    assert_eq!(f32::from(next.size.width), 1024.0);
+    // A window already against the bottom-right edge starts a new cascade at
+    // the top-left instead of opening exactly on top of it.
+    let wrapped = cascaded_window_bounds(from(704.0, 349.0), centered, &[display]);
+    assert_eq!(
+        (f32::from(wrapped.origin.x), f32::from(wrapped.origin.y)),
+        (NEW_WINDOW_CASCADE, NEW_WINDOW_CASCADE)
+    );
+    // Without a known position the centered default is used.
+    let unknown = WorkspaceWindowState::default();
+    assert_eq!(
+        cascaded_window_bounds(unknown, centered, &[display]),
+        centered
+    );
+}
+
 #[gpui::test]
 fn go_to_folder_restores_shortcut_autocomplete_validation_recent_and_modal_geometry(
     cx: &mut TestAppContext,
@@ -11389,6 +11427,160 @@ fn native_remote_editor_persists_profile_and_failed_connect_can_retry(cx: &mut T
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    remove_fixture(&root);
+}
+
+fn remote_test_environment(helper_status: &str) -> RemoteDriveEnvironment {
+    RemoteDriveEnvironment {
+        platform: std::env::consts::OS.to_string(),
+        rclone_available: true,
+        rclone_version: Some("fake-rclone 1.0".to_string()),
+        winfsp_available: cfg!(windows).then_some(true),
+        helper_status: cfg!(target_os = "macos").then(|| helper_status.to_string()),
+        occupied_mount_targets: Vec::new(),
+        error: None,
+    }
+}
+
+/// Found on a real machine: once a click elsewhere took the focus away from
+/// the profile editor's field, clicking the field again did not focus it,
+/// so typing went nowhere.
+#[gpui::test]
+fn the_remote_editor_field_takes_focus_back_when_clicked(cx: &mut TestAppContext) {
+    let root = fixture_dir();
+    let backend = Arc::new(FakeGpuiRemoteBackend::default());
+    let services = NativeServices::with_remote_backend(
+        ResourcePaths::test(&root),
+        Arc::clone(&backend) as Arc<dyn RemoteDriveBackend>,
+    );
+    let (view, window) =
+        cx.add_window_view(|_, cx| DirectoryWindow::restore(root.clone(), false, services, cx));
+    window.simulate_resize(gpui::size(px(1024.0), px(768.0)));
+    view.update(window, |view, cx| {
+        view.install_shortcut_bindings(cx);
+        view.remote.environment = Some(remote_test_environment("enabled"));
+        view.remote.available = vec!["cloud".to_string()];
+        view.open_remote_drive_manager(cx);
+        view.remote.environment = Some(remote_test_environment("enabled"));
+        view.open_remote_profile_editor(None, cx);
+    });
+    window.run_until_parked();
+    let input_focus = view.read_with(window, |view, _| view.text_input.focus.clone().unwrap());
+    let field_focused = |window: &mut gpui::VisualTestContext| {
+        window.update(|window, _| input_focus.is_focused(window))
+    };
+    assert!(field_focused(window), "the new editor field starts focused");
+
+    // A click outside the field, on the status bar, takes the focus away.
+    window.simulate_click(
+        gpui::point(px(500.0), px(760.0)),
+        gpui::Modifiers::default(),
+    );
+    window.run_until_parked();
+    assert!(!field_focused(window));
+
+    let field = window
+        .debug_bounds("remote-profile-editor-field")
+        .expect("the editor field renders");
+    window.simulate_click(field.center(), gpui::Modifiers::default());
+    window.run_until_parked();
+    assert!(field_focused(window), "clicking the field focuses it again");
+    for character in ["O", "f", "f", "i", "c", "e"] {
+        window.update(|window, cx| {
+            window.dispatch_keystroke(
+                Keystroke::parse(character).unwrap().with_simulated_ime(),
+                cx,
+            );
+        });
+    }
+    window.run_until_parked();
+    view.read_with(window, |view, _| assert_eq!(view.overlay.query, "Office"));
+    remove_fixture(&root);
+}
+
+#[gpui::test]
+fn the_remote_manager_shows_how_to_ready_the_helper_and_hints_each_field(cx: &mut TestAppContext) {
+    let root = fixture_dir();
+    let backend = Arc::new(FakeGpuiRemoteBackend::default());
+    let services = NativeServices::with_remote_backend(
+        ResourcePaths::test(&root),
+        Arc::clone(&backend) as Arc<dyn RemoteDriveBackend>,
+    );
+    let (view, window) =
+        cx.add_window_view(|_, cx| DirectoryWindow::restore(root.clone(), false, services, cx));
+    window.simulate_resize(gpui::size(px(1024.0), px(768.0)));
+    view.update(window, |view, cx| {
+        view.remote.available = vec!["cloud".to_string()];
+        view.open_remote_drive_manager(cx);
+    });
+    window.run_until_parked();
+
+    // The helper row shows whenever the macOS helper is not ready, with no
+    // error needed to reveal it.
+    for (helper, shown) in [
+        ("not-registered", cfg!(target_os = "macos")),
+        ("approval-required", cfg!(target_os = "macos")),
+        ("enabled", false),
+    ] {
+        view.update(window, |view, cx| {
+            view.remote.environment = Some(remote_test_environment(helper));
+            view.remote.setup_error = None;
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert_eq!(
+            window.debug_bounds("remote-helper-setup").is_some(),
+            shown,
+            "helper {helper}"
+        );
+        assert_eq!(
+            window.debug_bounds("install-remote-helper").is_some(),
+            shown,
+            "helper {helper}"
+        );
+        if shown {
+            // The long explanation wraps; its buttons stay inside the dialog.
+            let manager = window.debug_bounds("remote-drive-manager").unwrap();
+            let install = window.debug_bounds("install-remote-helper").unwrap();
+            assert!(
+                install.right() <= manager.right(),
+                "helper {helper}: {install:?} outside {manager:?}"
+            );
+        }
+    }
+
+    // Each step of the profile editor hints at what it wants.
+    view.update(window, |view, cx| view.open_remote_profile_editor(None, cx));
+    window.run_until_parked();
+    let placeholder = |view: &Entity<DirectoryWindow>, window: &mut gpui::VisualTestContext| {
+        view.read_with(window, |view, cx| {
+            view.text_input
+                .entity
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .placeholder()
+                .to_string()
+        })
+    };
+    let mut seen = Vec::new();
+    for value in ["Office", "cloud", "", ""] {
+        seen.push(placeholder(&view, window));
+        view.update(window, |view, cx| {
+            if view.remote.editor.as_ref().unwrap().field.next().is_some() {
+                view.overlay.query = value.to_string();
+                view.commit_remote_editor_field(cx);
+            }
+        });
+        window.run_until_parked();
+    }
+    assert_eq!(seen[0], "My NAS");
+    assert_eq!(seen[1], "Remote name from rclone config");
+    assert_eq!(seen[2], "Optional folder inside the remote");
+    assert!(
+        !seen.iter().any(|hint| hint == "Type to filter…"),
+        "{seen:?}"
+    );
     remove_fixture(&root);
 }
 

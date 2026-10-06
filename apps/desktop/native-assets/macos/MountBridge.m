@@ -26,9 +26,29 @@ int explorie_mount_helper_status(void) {
     }
 }
 
-int explorie_mount_helper_register(void) {
-    NSError *error = nil;
-    if (ExplorieService().status == SMAppServiceStatusNotRegistered && ![ExplorieService() registerAndReturnError:&error]) {
+// Registers the helper so macOS lists it under Login Items, and returns its
+// status. On failure returns -1 and, when `error` is not NULL, stores macOS's
+// explanation there (free it with explorie_mount_helper_free).
+int explorie_mount_helper_register(char **error) {
+    SMAppService *service = ExplorieService();
+    NSError *failure = nil;
+    if (service.status == SMAppServiceStatusRequiresApproval) {
+        // A registration still waiting for approval can belong to a copy of
+        // the app that no longer exists: one macOS ran from App Translocation,
+        // a mounted installer, or a build that was since deleted. Login Items
+        // then has nothing to show for it, so it can never be approved; this
+        // was seen on a real machine, where Connect stayed "approval required"
+        // with nothing listed. Re-registering from this bundle replaces that
+        // record and makes macOS announce the helper again. For a registration
+        // that is already this bundle's, it only re-posts the same request.
+        [service unregisterAndReturnError:&failure];
+        failure = nil;
+    }
+    if (service.status == SMAppServiceStatusNotRegistered && ![service registerAndReturnError:&failure]) {
+        if (error != NULL) {
+            NSString *message = failure.localizedDescription ?: @"macOS refused to register the Remote Drives helper.";
+            *error = strdup(message.UTF8String);
+        }
         return -1;
     }
     return explorie_mount_helper_status();

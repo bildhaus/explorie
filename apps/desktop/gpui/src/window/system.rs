@@ -170,11 +170,10 @@ impl DirectoryWindow {
             return;
         };
         if !status.supported {
-            self.show_toast(
-                "Automatic folder opening is available on Windows and macOS",
-                ToastKind::Warning,
-                cx,
-            );
+            let message = status.unavailable_reason.clone().unwrap_or_else(|| {
+                "Automatic folder opening is available on Windows and macOS".to_string()
+            });
+            self.show_toast(message, ToastKind::Warning, cx);
             return;
         }
 
@@ -200,6 +199,16 @@ impl DirectoryWindow {
                             ToastKind::Success,
                             cx,
                         );
+                    }
+                    // macOS refused the change outright: show why, as a
+                    // disabled setting rather than an error to retry.
+                    Err(error) if error.code == ErrorCode::Unsupported => {
+                        view.system.integration_status = Some(SystemIntegrationStatus {
+                            supported: false,
+                            enabled: false,
+                            unavailable_reason: Some(error.message.clone()),
+                        });
+                        view.show_toast(error.message, ToastKind::Warning, cx);
                     }
                     Err(error) => {
                         view.system.integration_error = Some(error.to_string());

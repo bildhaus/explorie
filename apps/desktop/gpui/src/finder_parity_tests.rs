@@ -942,6 +942,40 @@ fn return_confirms_a_prompt_without_a_text_field(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_locked_folder_handler_disables_the_toggle_and_says_why(cx: &mut TestAppContext) {
+    let fixture = SearchFixture::new();
+    let (view, window) = fixture.open(cx);
+    let reason = "This version of macOS keeps Finder as the app that opens folders.";
+    view.update(window, |view, cx| {
+        view.system.integration_status = Some(explorie_native_services::SystemIntegrationStatus {
+            supported: false,
+            enabled: false,
+            unavailable_reason: Some(reason.to_string()),
+        });
+        view.settings_ui.panel_open = true;
+        view.settings_ui.tab = SettingsTab::Integration;
+        cx.notify();
+    });
+    window.run_until_parked();
+    assert!(window.debug_bounds("settings-folder-handler").is_some());
+
+    // Clicking the disabled toggle changes nothing and explains instead of
+    // claiming the platform is unsupported.
+    view.update(window, |view, cx| view.toggle_system_integration(cx));
+    view.update(window, |view, _| {
+        assert!(!view.system.integration_pending);
+        assert_eq!(
+            view.toasts
+                .current
+                .as_ref()
+                .map(|toast| toast.message.as_str()),
+            Some(reason)
+        );
+    });
+    fixture.remove();
+}
+
+#[gpui::test]
 fn media_shortcut_hints_show_only_where_the_keys_work(cx: &mut TestAppContext) {
     use super::render_perf_tests::{Fixture, open_window, preview, wait_for};
 
