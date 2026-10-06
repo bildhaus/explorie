@@ -343,6 +343,70 @@ pub(crate) fn file_drag_operation(window: &Window) -> FileOperationKind {
     }
 }
 
+/// What dropping `sources` on the folder `target` does, as in Finder and
+/// Explorer: within one volume a drop moves and across volumes it copies.
+/// Option (Ctrl on Windows) forces a copy, Command (Shift on Windows) forces
+/// a move. Sources whose volume cannot be determined copy, which never
+/// removes anything. This checks the filesystem, so external drops call it
+/// off the UI thread.
+pub(crate) fn drop_operation(
+    modifiers: gpui::Modifiers,
+    sources: &[PathBuf],
+    target: &Path,
+) -> FileOperationKind {
+    if modifiers.alt || modifiers.control {
+        return FileOperationKind::Copy;
+    }
+    let force_move = if cfg!(target_os = "macos") {
+        modifiers.platform
+    } else {
+        modifiers.shift
+    };
+    if force_move {
+        return FileOperationKind::Move;
+    }
+    let Some(target_volume) = volume_of(target, true) else {
+        return FileOperationKind::Copy;
+    };
+    if sources
+        .iter()
+        .all(|source| volume_of(source, false).is_some_and(|volume| volume == target_volume))
+    {
+        FileOperationKind::Move
+    } else {
+        FileOperationKind::Copy
+    }
+}
+
+/// An identifier of the volume holding `path`: the item itself for a source
+/// (a link lives where the link is), what it resolves to for a target.
+#[cfg(unix)]
+fn volume_of(path: &Path, follow: bool) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = if follow {
+        std::fs::metadata(path)
+    } else {
+        std::fs::symlink_metadata(path)
+    };
+    metadata.ok().map(|metadata| metadata.dev())
+}
+
+/// An identifier of the volume holding `path`: its drive or UNC share.
+#[cfg(windows)]
+fn volume_of(path: &Path, follow: bool) -> Option<String> {
+    let resolved = if follow {
+        std::fs::canonicalize(path).ok()?
+    } else {
+        std::fs::canonicalize(path.parent()?).ok()?
+    };
+    match resolved.components().next()? {
+        std::path::Component::Prefix(prefix) => {
+            Some(prefix.as_os_str().to_string_lossy().to_ascii_lowercase())
+        }
+        _ => None,
+    }
+}
+
 impl FavoriteDrag {
     pub(crate) fn new(path: PathBuf, name: String) -> Self {
         Self {

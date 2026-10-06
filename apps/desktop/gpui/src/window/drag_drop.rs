@@ -200,8 +200,13 @@ impl DirectoryWindow {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let kind = file_drag_operation(window);
         let target = operation_destination(&target);
+        let dragged = drag
+            .items()
+            .iter()
+            .map(|item| item.path.clone())
+            .collect::<Vec<_>>();
+        let kind = drop_operation(window.modifiers(), &dragged, &target);
         if target_is_link || !valid_file_drop_target(&target, drag, kind) {
             let target_key = comparable_drop_path(&target);
             if drag.items().iter().any(|item| {
@@ -252,21 +257,28 @@ impl DirectoryWindow {
         self.finish_file_drag(cx);
     }
 
-    /// Copy dropped external paths into `target`. Checking which paths exist
-    /// and which are folders touches the filesystem (possibly a slow or
-    /// offline volume), so it runs off the UI thread.
+    /// Move or copy paths dropped from another app into `target`, as Finder
+    /// does: a move within a volume, a copy across volumes, with `modifiers`
+    /// (held at the drop) forcing either. Checking which paths exist, which
+    /// are folders and where they live touches the filesystem (possibly a
+    /// slow or offline volume), so it runs off the UI thread.
     pub(crate) fn drop_external_paths_to(
         &mut self,
         paths: &ExternalPaths,
         target: PathBuf,
+        modifiers: gpui::Modifiers,
         cx: &mut Context<Self>,
     ) {
         let dropped = paths.paths().to_vec();
         let target = operation_destination(&target);
         let destination = target.clone();
-        let sources = cx.background_spawn(async move { external_drop_sources(dropped, &target) });
+        let planned = cx.background_spawn(async move {
+            let sources = external_drop_sources(dropped, &target);
+            let kind = drop_operation(modifiers, &sources, &target);
+            (sources, kind)
+        });
         cx.spawn(async move |this, cx| {
-            let sources = sources.await;
+            let (sources, kind) = planned.await;
             let _ = this.update(cx, |view, cx| {
                 if sources.is_empty() {
                     view.show_toast(
@@ -278,7 +290,7 @@ impl DirectoryWindow {
                 }
                 view.start_file_operation(
                     FileOperationRequest {
-                        kind: FileOperationKind::Copy,
+                        kind,
                         sources,
                         destination: Some(destination),
                         conflict_policy: view.operation_ui.conflict_policy,
@@ -546,6 +558,85 @@ mod tests {
         fs::remove_dir(root.join("folder")).unwrap();
         assert!(external_paths_include_directory(&folder));
         assert!(!external_paths_include_directory(&files));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn drops_move_within_a_volume_and_modifiers_choose_otherwise() {
+        use std::fs;
+
+        let root = std::env::temp_dir().join(format!("explorie-drop-{}", uuid::Uuid::new_v4()));
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(root.join("file.txt"), "file").unwrap();
+        let sources = vec![root.join("file.txt")];
+        let missing = vec![root.join("missing.txt")];
+        let none = gpui::Modifiers::default();
+        let copy = gpui::Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        let force_move = if cfg!(target_os = "macos") {
+            gpui::Modifiers {
+                platform: true,
+                ..Default::default()
+            }
+        } else {
+            gpui::Modifiers {
+                shift: true,
+                ..Default::default()
+            }
+        };
+
+        assert_eq!(
+            drop_operation(none, &sources, &target),
+            FileOperationKind::Move
+        );
+        assert_eq!(
+            drop_operation(copy, &sources, &target),
+            FileOperationKind::Copy
+        );
+        // Where a source lives cannot be told, so the drop copies.
+        assert_eq!(
+            drop_operation(none, &missing, &target),
+            FileOperationKind::Copy
+        );
+        assert_eq!(
+            drop_operation(force_move, &missing, &target),
+            FileOperationKind::Move
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[gpui::test]
+    fn files_dropped_from_another_app_on_the_same_volume_move(cx: &mut gpui::TestAppContext) {
+        use std::fs;
+
+        let root = std::env::temp_dir().join(format!("explorie-drop-{}", uuid::Uuid::new_v4()));
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(root.join("file.txt"), "file").unwrap();
+        let services = NativeServices::new(explorie_native_services::ResourcePaths::test(&root));
+        let folder = target.clone();
+        let (view, cx) = cx.add_window_view(|_, cx| DirectoryWindow::new(folder, services, cx));
+        let dropped = ExternalPaths(vec![root.join("file.txt")].into());
+        view.update(cx, |view, cx| {
+            view.drop_external_paths_to(&dropped, target.clone(), gpui::Modifiers::default(), cx);
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while view.update(cx, |view, _| view.operations.latest().is_none()) {
+            assert!(
+                Instant::now() < deadline,
+                "the drop never started an operation"
+            );
+            cx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        view.update(cx, |view, _| {
+            let request = view.operations.latest().unwrap().request();
+            assert_eq!(request.kind, FileOperationKind::Move);
+            assert_eq!(request.sources, vec![root.join("file.txt")]);
+        });
         fs::remove_dir_all(root).unwrap();
     }
 }
