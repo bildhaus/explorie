@@ -774,6 +774,19 @@ test('CI tests cannot hang a runner: nextest kills stuck tests and steps are bou
   assert.doesNotMatch(workflowEnv.replace(/^  CARGO_TERM_COLOR: always\n/m, ''), /^  (RUST|CARGO)_/m);
 });
 
+test('Objective-C linked into the app avoids @available', async () => {
+  // @available compiles to a call into the compiler runtime
+  // (__isPlatformVersionAtLeast) that the Rust link does not include, so a
+  // release build targeting older macOS fails to link while CI passes.
+  const build = await readFile(path.join(process.cwd(), 'crates/native-services/build.rs'), 'utf8');
+  const bridges = [...build.matchAll(/root\.join\("([A-Za-z]+\.m)"\)/g)].map(match => match[1]);
+  assert.ok(bridges.length > 0, 'expected Objective-C bridges in native-services/build.rs');
+  for (const bridge of bridges) {
+    const source = await readFile(path.join(process.cwd(), 'apps/desktop/native-assets/macos', bridge), 'utf8');
+    assert.doesNotMatch(source, /@available\s*\(|__builtin_available\s*\(/, bridge);
+  }
+});
+
 test('CI lints macOS-only code without enabling runtime shaders', async () => {
   const ci = await readFile(path.join(process.cwd(), '.github/workflows/ci.yml'), 'utf8');
   const macos = ci.match(/name: macOS GPUI Tests & Build[\s\S]*?(?=\n  [a-z-]+:\n)/)?.[0] ?? '';

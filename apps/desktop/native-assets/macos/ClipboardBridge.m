@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
+#import <objc/message.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,11 +93,15 @@ char *explorie_clipboard_write_files(
 
 // The pasteboard's access behavior (NSPasteboardAccessBehavior), or -1 where
 // macOS has no pasteboard privacy.
+//
+// This checks for the method instead of using @available: an @available
+// check compiles to a call into the compiler runtime
+// (__isPlatformVersionAtLeast), which the Rust link does not include, so
+// release builds targeting older macOS versions failed to link.
 static int32_t ExplorieAccessBehavior(NSPasteboard *pasteboard) {
-#ifdef __MAC_15_4
-    if (@available(macOS 15.4, *)) return (int32_t)pasteboard.accessBehavior;
-#endif
-    return -1;
+    SEL accessBehavior = NSSelectorFromString(@"accessBehavior");
+    if (![pasteboard respondsToSelector:accessBehavior]) return -1;
+    return (int32_t)((NSInteger (*)(id, SEL))objc_msgSend)(pasteboard, accessBehavior);
 }
 
 // Describes the pasteboard without reading its data, so it never asks the
