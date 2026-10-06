@@ -617,13 +617,38 @@ fn with_staged_extraction<T>(
     let result = (|| {
         let value = extract(&staging)?;
         validate_tree_without_links(&staging)?;
-        commit_staged_directory(&staging, &output, &parent)?;
+        // An archive holding one top-level folder and nothing else extracts
+        // that folder's contents into the output, as Finder's Archive
+        // Utility does, instead of nesting the folder inside it.
+        match single_top_level_directory(&staging)? {
+            Some(inner) => {
+                commit_staged_directory(&inner, &output, &parent)?;
+                if let Err(error) = fs::remove_dir(&staging) {
+                    tracing::warn!(path = %staging.display(), %error, "failed to remove empty archive staging directory");
+                }
+            }
+            None => commit_staged_directory(&staging, &output, &parent)?,
+        }
         Ok(value)
     })();
     if result.is_err() {
         remove_staging_directory(&staging);
     }
     result
+}
+
+/// The only entry in `staging` when it is a real directory, or `None`.
+fn single_top_level_directory(staging: &Path) -> io::Result<Option<PathBuf>> {
+    let mut entries = fs::read_dir(staging)?;
+    let Some(first) = entries.next().transpose()? else {
+        return Ok(None);
+    };
+    if entries.next().transpose()?.is_some() {
+        return Ok(None);
+    }
+    let path = first.path();
+    let metadata = fs::symlink_metadata(&path)?;
+    Ok((metadata.is_dir() && !metadata.file_type().is_symlink()).then_some(path))
 }
 
 impl ArchiveFormat {
@@ -2566,11 +2591,42 @@ mod tests {
         let extract_dir = temp_dir.path().join("extracted");
         extract_zip_archive(&archive_path, &extract_dir).unwrap();
 
-        // Verify extraction
-        let extracted_file = extract_dir.join("source/test.txt");
+        // The archive's only top-level entry is the "source" folder, so its
+        // contents land directly in the extraction folder, as in Finder's
+        // Archive Utility, rather than in "extracted/source".
+        let extracted_file = extract_dir.join("test.txt");
         assert!(extracted_file.exists());
+        assert!(!extract_dir.join("source").exists());
         let content = fs::read_to_string(&extracted_file).unwrap();
         assert_eq!(content, "Hello, World!");
+        assert_no_staging_paths(temp_dir.path());
+    }
+
+    #[test]
+    fn several_top_level_entries_or_one_file_extract_as_they_are() {
+        let temp_dir = TempDir::new().unwrap();
+        let first = temp_dir.path().join("first.txt");
+        let second = temp_dir.path().join("second");
+        fs::write(&first, b"first").unwrap();
+        fs::create_dir(&second).unwrap();
+        fs::write(second.join("inside.txt"), b"inside").unwrap();
+
+        let several = temp_dir.path().join("several.zip");
+        create_zip_archive(&[first.clone(), second], &several, CompressionLevel::Normal).unwrap();
+        let several_out = temp_dir.path().join("several");
+        extract_archive(&several, &several_out).unwrap();
+        assert_eq!(fs::read(several_out.join("first.txt")).unwrap(), b"first");
+        assert_eq!(
+            fs::read(several_out.join("second/inside.txt")).unwrap(),
+            b"inside"
+        );
+
+        let single_file = temp_dir.path().join("single.zip");
+        create_zip_archive(&[first], &single_file, CompressionLevel::Normal).unwrap();
+        let single_out = temp_dir.path().join("single");
+        extract_archive(&single_file, &single_out).unwrap();
+        assert_eq!(fs::read(single_out.join("first.txt")).unwrap(), b"first");
+        assert_no_staging_paths(temp_dir.path());
     }
 
     #[test]
@@ -2604,7 +2660,7 @@ mod tests {
         extract_zip_archive_with_password(&archive_path, &extract_dir, Some("password123"))
             .unwrap();
 
-        let extracted_file = extract_dir.join("source/secret.txt");
+        let extracted_file = extract_dir.join("secret.txt");
         let content = fs::read_to_string(&extracted_file).unwrap();
         assert_eq!(content, "Top secret");
     }
@@ -2628,7 +2684,7 @@ mod tests {
         let extracted = temp.path().join("plain-extracted");
         extract_7z_archive(&archive_path, &extracted, None).unwrap();
         assert_eq!(
-            fs::read(extracted.join("source/hello.txt")).unwrap(),
+            fs::read(extracted.join("hello.txt")).unwrap(),
             b"Hello from 7z"
         );
 
@@ -2648,7 +2704,7 @@ mod tests {
         let protected_extracted = temp.path().join("protected-extracted");
         extract_7z_archive(&protected_path, &protected_extracted, Some("password123")).unwrap();
         assert_eq!(
-            fs::read(protected_extracted.join("source/hello.txt")).unwrap(),
+            fs::read(protected_extracted.join("hello.txt")).unwrap(),
             b"Hello from 7z"
         );
     }
@@ -2673,7 +2729,7 @@ mod tests {
         let extract_dir = temp_dir.path().join("extracted");
         extract_zip_archive(&archive_path, &extract_dir).unwrap();
 
-        let extracted_file = extract_dir.join("source/large.bin");
+        let extracted_file = extract_dir.join("large.bin");
         let extracted_payload = fs::read(&extracted_file).unwrap();
         assert_eq!(extracted_payload.len(), payload.len());
         assert_eq!(extracted_payload, payload);
@@ -2697,7 +2753,7 @@ mod tests {
         let extract_dir = temp_dir.path().join("extracted");
         extract_zip_archive(&archive_path, &extract_dir).unwrap();
 
-        let extracted_file = extract_dir.join("source").join(file_name);
+        let extracted_file = extract_dir.join(file_name);
         let content = fs::read_to_string(&extracted_file).unwrap();
         assert_eq!(content, "Unicode content");
     }

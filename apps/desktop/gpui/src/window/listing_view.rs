@@ -654,11 +654,12 @@ impl DirectoryWindow {
                                         style.border_color(palette.accent).bg(palette.selected)
                                     })
                                     .on_drop(cx.listener(
-                                        move |this, paths: &ExternalPaths, _, cx| {
+                                        move |this, paths: &ExternalPaths, window, cx| {
                                             cx.stop_propagation();
                                             this.drop_external_paths_to(
                                                 paths,
                                                 external_drop_target.clone(),
+                                                window.modifiers(),
                                                 cx,
                                             );
                                         },
@@ -1011,11 +1012,12 @@ impl DirectoryWindow {
                                         })
                                         .on_drop(
                                             cx.listener(
-                                                move |this, paths: &ExternalPaths, _, cx| {
+                                                move |this, paths: &ExternalPaths, window, cx| {
                                                     cx.stop_propagation();
                                                     this.drop_external_paths_to(
                                                         paths,
                                                         external_drop_target.clone(),
+                                                        window.modifiers(),
                                                         cx,
                                                     );
                                                 },
@@ -1482,18 +1484,17 @@ impl DirectoryWindow {
                                                     .border_color(palette.accent)
                                                     .bg(palette.selected)
                                             })
-                                            .on_drop(
-                                                cx.listener(
-                                                    move |this, paths: &ExternalPaths, _, cx| {
-                                                        cx.stop_propagation();
-                                                        this.drop_external_paths_to(
-                                                            paths,
-                                                            external_drop_target.clone(),
-                                                            cx,
-                                                        );
-                                                    },
-                                                ),
-                                            )
+                                            .on_drop(cx.listener(
+                                                move |this, paths: &ExternalPaths, window, cx| {
+                                                    cx.stop_propagation();
+                                                    this.drop_external_paths_to(
+                                                        paths,
+                                                        external_drop_target.clone(),
+                                                        window.modifiers(),
+                                                        cx,
+                                                    );
+                                                },
+                                            ))
                                         })
                                     })
                                     .into_any_element(),

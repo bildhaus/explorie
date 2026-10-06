@@ -481,8 +481,13 @@ impl Render for DirectoryWindow {
             })
             .track_focus(&self.focus_handle)
             .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(with_alpha(rgb(0x4ea1ff), 0.06)))
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
-                this.drop_external_paths_to(paths, this.browser.path().to_path_buf(), cx);
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.drop_external_paths_to(
+                    paths,
+                    this.browser.path().to_path_buf(),
+                    window.modifiers(),
+                    cx,
+                );
                 cx.stop_propagation();
             }))
             .on_key_down(cx.listener(Self::handle_search_key))

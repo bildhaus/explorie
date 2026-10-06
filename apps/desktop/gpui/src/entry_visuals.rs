@@ -23,6 +23,7 @@ pub(crate) fn conflict_policy_label(policy: ConflictPolicy) -> &'static str {
         ConflictPolicy::Error => "ask",
         ConflictPolicy::Rename => "keep both",
         ConflictPolicy::Replace => "replace",
+        ConflictPolicy::Duplicate => "duplicate",
     }
 }
 
