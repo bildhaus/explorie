@@ -1,0 +1,413 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Tests run under cargo-nextest (.config/nextest.toml, profile "ci"): one
+# process per test, in parallel, with a per-test timeout so a hung test fails
+# by name in minutes instead of holding a runner until the job timeout. Every
+# heavy step also has its own timeout. Job timeouts only need to fit a cold
+# dependency cache (a new Cargo.lock or toolchain rebuilds every crate).
+#
+# Keep RUST_* and CARGO_* variables out of workflow and job env: rust-cache
+# hashes them into its cache key, so adding one there invalidates every cache.
+# Set them on individual steps instead.
+
+jobs:
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.classify.outputs.native }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect native or release changes
+        id: classify
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            files=$(git diff-tree --root --no-commit-id --name-only -r "$HEAD_SHA")
+          else
+            files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          fi
+
+          native=false
+          while IFS= read -r file; do
+            case "$file" in
+              *.md|.github/ISSUE_TEMPLATE/*|.github/pull_request_template.md) ;;
+              *) native=true; break ;;
+            esac
+          done <<< "$files"
+
+          echo "native=$native" >> "$GITHUB_OUTPUT"
+          echo "Native or release validation required: $native" >> "$GITHUB_STEP_SUMMARY"
+
+  linux:
+    name: Linux Format, Clippy & Unix Safety Tests
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
+          components: clippy, rustfmt
+
+      - name: Rust format check
+        run: cargo fmt --all -- --check
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: './ -> target'
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@aa7e9e10a2fd43c88f1948b7de4af2f4efd56483
+        with:
+          tool: cargo-nextest
+
+      - name: Install GPUI Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes pkg-config libasound2-dev libfontconfig-dev libfreetype-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libx11-xcb-dev \
+            libxcb1-dev libvulkan-dev libssl-dev libzstd-dev
+
+      - name: Lint the workspace on Linux
+        # Linux is not a product target (main() exits early), but linting it
+        # keeps gpui_platform bumps and shared cfg(unix) code from rotting and
+        # catches platform-gated code that is dead on Linux.
+        timeout-minutes: 15
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Lint without the optional preview backends
+        # 3D, audio, SQLite, Parquet/Arrow, font and email previews are default
+        # cargo features that local builds can turn off (no CMake needed). Lint
+        # that reduced build so its fallbacks keep compiling without warnings.
+        timeout-minutes: 10
+        run: cargo clippy --locked -p explorie-native-services -p explorie-gpui --no-default-features --all-targets -- -D warnings
+
+      - name: Test Unix safety regressions
+        # Real RAR extraction limits, and the Unix journal and helper lifecycle.
+        timeout-minutes: 15
+        env:
+          RUST_BACKTRACE: 1
+        run: >-
+          cargo nextest run --locked --profile ci -p explorie-core -p explorie-native-services
+          -E 'test(=archive::tests::real_rar_fixture_extracts_and_enforces_budget_and_cancellation)
+          | (package(explorie-native-services) & test(unix_))'
+
+      - name: Compile documentation examples
+        # nextest does not run doctests; the examples are no_run, so this only
+        # proves they still compile.
+        timeout-minutes: 10
+        run: cargo test --locked --doc -p explorie-core
+
+  macos:
+    name: macOS GPUI Tests & Build
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
+          components: clippy
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: './ -> target'
+          # Shared with build-release.yml so tagged releases restore main's cache.
+          shared-key: desktop-macos
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@aa7e9e10a2fd43c88f1948b7de4af2f4efd56483
+        with:
+          tool: cargo-nextest
+
+      - name: GPUI-native Rust clippy on macOS
+        # Windows lints with --all-features. CI must not enable the local-only
+        # explorie-gpui/runtime-shaders feature, and every other feature (the
+        # optional preview backends) is on by default, so macOS lints default
+        # features (every other cfg(target_os = "macos") path).
+        timeout-minutes: 25
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Prepare and smoke-test 7-Zip
+        run: |
+          node scripts/prepare-7zip.mjs
+          node scripts/smoke-7zip.mjs apps/desktop/native-assets/binaries/7zip-aarch64-apple-darwin/7zz
+
+      - name: Test the workspace on macOS
+        timeout-minutes: 30
+        env:
+          RUST_BACKTRACE: 1
+          TMPDIR: ${{ runner.temp }}
+        run: cargo nextest run --locked --profile ci --workspace
+
+      - name: Verify CoreText glyphs reach the Metal renderer
+        timeout-minutes: 10
+        env:
+          EXPLORIE_RENDER_PROBE_OUTPUT: target/macos-render-probe.png
+        run: cargo run --locked -p explorie-gpui --example macos_render_probe
+
+      - name: Upload macOS rendering proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-render-probe
+          path: target/macos-render-probe.png
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Build GPUI macOS application
+        timeout-minutes: 20
+        run: |
+          node scripts/package-plugins.mjs --target aarch64-apple-darwin
+          export EXPLORIE_PLUGIN_CATALOG="$PWD/release-artifacts/plugins-aarch64-apple-darwin/explorie-plugin-catalog-aarch64-apple-darwin.json"
+          cargo build -p explorie-gpui --profile ci --locked
+
+      - name: Smoke-test the bundled integrations
+        timeout-minutes: 10
+        run: >-
+          EXPLORIE_PLUGIN_SMOKE_CATALOG="$PWD/release-artifacts/plugins-aarch64-apple-darwin/explorie-plugin-catalog-aarch64-apple-darwin.json"
+          EXPLORIE_PLUGIN_SMOKE_DIRECTORY="$PWD/target/ci/plugins"
+          cargo nextest run --locked --profile ci -p explorie-native-services -p explorie-gpui --run-ignored only
+          -E 'test(=plugins::tests::official_bundled_packages_install_and_execute_through_native_manager)
+          | test(=plugins_ui::tests::bundled_integrations_do_not_stall_column_navigation)'
+
+      - name: Test crash guards in an optimized build
+        # Tests always unwind, so this proves the catch_unwind guards survive
+        # optimization; the compile_error! guard rejects panic = "abort" builds.
+        # Selecting explorie-gpui too unifies features with the app build above,
+        # so its ci-profile dependencies are reused instead of rebuilt.
+        timeout-minutes: 15
+        run: cargo test --locked --profile ci -p explorie-native-services -p explorie-gpui --test panic_guards
+
+  windows:
+    name: Windows Tests, Lint & Release Contracts
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: '9.15.9'
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24.19.0'
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
+          components: clippy
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: './ -> target'
+          # Shared with build-release.yml so tagged releases restore main's cache.
+          shared-key: desktop-windows
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@aa7e9e10a2fd43c88f1948b7de4af2f4efd56483
+        with:
+          tool: cargo-nextest
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Prepare native dependencies
+        run: pnpm prepare:native
+
+      - name: Release workflow tests
+        run: pnpm release:check:test
+
+      - name: GPUI-native Rust clippy
+        timeout-minutes: 25
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test the workspace on Windows
+        timeout-minutes: 30
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo nextest run --locked --profile ci --workspace
+
+      - name: Build GPUI Windows release
+        timeout-minutes: 20
+        shell: pwsh
+        run: |
+          node scripts/package-plugins.mjs --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "Plugin packaging failed." }
+          $env:EXPLORIE_PLUGIN_CATALOG = Join-Path $PWD "release-artifacts/plugins-x86_64-pc-windows-msvc/explorie-plugin-catalog-x86_64-pc-windows-msvc.json"
+          cargo build -p explorie-gpui --profile ci --locked
+          if ($LASTEXITCODE -ne 0) { throw "GPUI optimized build failed." }
+
+      - name: Smoke-test the bundled integrations
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $env:EXPLORIE_PLUGIN_SMOKE_CATALOG = Join-Path $PWD "release-artifacts/plugins-x86_64-pc-windows-msvc/explorie-plugin-catalog-x86_64-pc-windows-msvc.json"
+          $env:EXPLORIE_PLUGIN_SMOKE_DIRECTORY = Join-Path $PWD "target/ci/plugins"
+          cargo nextest run --locked --profile ci -p explorie-native-services -p explorie-gpui --run-ignored only `
+            -E 'test(=plugins::tests::official_bundled_packages_install_and_execute_through_native_manager) | test(=plugins_ui::tests::bundled_integrations_do_not_stall_column_navigation)'
+          if ($LASTEXITCODE -ne 0) { throw "Bundled integration smoke tests failed." }
+
+      - name: Smoke test GPUI Windows release
+        timeout-minutes: 5
+        run: pwsh -NoProfile -File scripts/smoke-gpui-release.ps1 -Executable target/ci/explorie-gpui.exe
+
+  security:
+    name: Security Audit
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
+
+      - name: Rust dependency cache
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: './ -> target'
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: '9.15.9'
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24.19.0'
+
+      - name: Install cargo-deny
+        # The repository only allows specific action SHAs; reuse the allow-listed
+        # install-action commit and pick the tool through its input.
+        uses: taiki-e/install-action@aa7e9e10a2fd43c88f1948b7de4af2f4efd56483
+        with:
+          tool: cargo-deny
+
+      - name: Check dependency licenses, bans, and sources
+        # deny.toml policy; advisories are left to cargo audit below (and to
+        # the weekly Scheduled Security Audit), so a new RustSec entry does not
+        # fail two steps.
+        run: cargo deny --locked check bans licenses sources
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@aa7e9e10a2fd43c88f1948b7de4af2f4efd56483 # cargo-audit
+
+      - name: Run cargo audit
+        run: |
+          set -o pipefail
+          echo "## Rust Security Audit" >> $GITHUB_STEP_SUMMARY
+          cargo audit 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Run pnpm audit
+        run: |
+          set -o pipefail
+          echo "## Node.js Security Audit" >> $GITHUB_STEP_SUMMARY
+          pnpm audit --audit-level=moderate 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+
+  gate:
+    name: CI Gate
+    if: always()
+    needs: [changes, linux, macos, windows, security]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require every applicable check
+        shell: bash
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          NATIVE: ${{ needs.changes.outputs.native }}
+          LINUX: ${{ needs.linux.result }}
+          MACOS: ${{ needs.macos.result }}
+          WINDOWS: ${{ needs.windows.result }}
+          SECURITY: ${{ needs.security.result }}
+        run: |
+          set -euo pipefail
+          # Classification must succeed: if it was cancelled or failed, every
+          # other job is skipped and nothing was actually checked.
+          if [ "$CHANGES" != "success" ]; then
+            echo "Change classification did not succeed ($CHANGES)."
+            exit 1
+          fi
+          if [ "$NATIVE" != "true" ]; then
+            echo "Documentation-only change: native checks were intentionally skipped."
+            exit 0
+          fi
+          required=("linux=$LINUX" "macos=$MACOS" "windows=$WINDOWS" "security=$SECURITY")
+          failed=0
+          for entry in "${required[@]}"; do
+            if [ "${entry#*=}" != "success" ]; then
+              echo "Required job ${entry%%=*} did not succeed (${entry#*=})."
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Every required CI job passed."

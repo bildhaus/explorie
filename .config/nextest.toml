@@ -1,0 +1,19 @@
+# cargo-nextest runs every test in its own process, so tests no longer share
+# GPUI globals, native-service pools or temp-dir state with each other. That is
+# what lets the suites run in parallel again: they used to be serialized
+# (`--test-threads=1`) because interaction tests interfered inside one process.
+
+[profile.default]
+# A test that stops making progress (a stuck event loop, a lost wakeup) is
+# killed and reported by name instead of stalling the whole run.
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[profile.ci]
+# Report every failure in one run.
+fail-fast = false
+# Retry a failed test once. A test that passes on retry is reported as FLAKY in
+# the summary, so intermittent failures stay visible without blocking merges.
+retries = 1
+slow-timeout = { period = "60s", terminate-after = 3 }
+# Print each failure where it happens and again in the final summary.
+failure-output = "immediate-final"

@@ -1,0 +1,33 @@
+{
+  "id": "syncthing",
+  "name": "Syncthing",
+  "version": "0.0.1",
+  "protocolVersion": 1,
+  "description": "Recognize synced folders and optionally connect to a local Syncthing instance.",
+  "executables": {
+    "x86_64-pc-windows-msvc": "explorie-plugin-syncthing.exe",
+    "aarch64-apple-darwin": "explorie-plugin-syncthing"
+  },
+  "capabilities": [
+    "Read folder markers and current listing",
+    "Read selected local Syncthing configuration and certificate",
+    "Connect to the local loopback Syncthing API"
+  ],
+  "dependencies": [
+    "Syncthing for live status"
+  ],
+  "settings": [
+    {
+      "key": "connected",
+      "label": "Connect to local Syncthing",
+      "kind": "boolean",
+      "description": "Explicitly allow authenticated local status access."
+    },
+    {
+      "key": "configPath",
+      "label": "Syncthing config.xml",
+      "kind": "file",
+      "description": "Leave empty to discover the standard local configuration."
+    }
+  ]
+}

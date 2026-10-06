@@ -1,0 +1,55 @@
+fn main() {
+    #[cfg(target_os = "macos")]
+    {
+        let root = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("../../apps/desktop/native-assets/macos");
+        println!(
+            "cargo:rerun-if-changed={}",
+            root.join("MountHelper.h").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            root.join("MountBridge.m").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            root.join("FolderIntegrationBridge.m").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            root.join("InstallCleanupBridge.m").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            root.join("OpenWithBridge.m").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            root.join("ClipboardBridge.m").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            root.join("PreviewImageBridge.m").display()
+        );
+        println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rustc-link-lib=framework=CoreServices");
+        println!("cargo:rustc-link-lib=framework=Security");
+        println!("cargo:rustc-link-lib=framework=ServiceManagement");
+        println!("cargo:rustc-link-lib=framework=CoreGraphics");
+        println!("cargo:rustc-link-lib=framework=ImageIO");
+        println!("cargo:rustc-link-lib=framework=QuickLookThumbnailing");
+        println!("cargo:rustc-link-lib=framework=UniformTypeIdentifiers");
+        cc::Build::new()
+            .file(root.join("MountBridge.m"))
+            .file(root.join("FolderIntegrationBridge.m"))
+            .file(root.join("InstallCleanupBridge.m"))
+            .file(root.join("OpenWithBridge.m"))
+            .file(root.join("ClipboardBridge.m"))
+            .file(root.join("PreviewImageBridge.m"))
+            .flag("-fobjc-arc")
+            .flag("-fblocks")
+            .flag("-mmacosx-version-min=13.0")
+            .compile("explorie_mount_bridge");
+    }
+}

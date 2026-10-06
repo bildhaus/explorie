@@ -1,0 +1,22 @@
+{
+  "design-mockups.png": {
+    "status": "Done",
+    "type": "Design",
+    "tags": ["ui", "approved"],
+    "reviewedBy": "Design Team"
+  },
+  "data.json": {
+    "type": "Data",
+    "category": "Reference",
+    "tags": ["api", "schema"],
+    "version": "1.2.3"
+  },
+  "app.js": {
+    "status": "In Progress",
+    "priority": "High",
+    "type": "Code",
+    "tags": ["frontend", "core"],
+    "assignee": "Sarah",
+    "notes": "Implement new theme engine"
+  }
+}

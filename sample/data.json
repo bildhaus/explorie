@@ -1,0 +1,83 @@
+{
+  "apiVersion": "1.2.3",
+  "endpoints": [
+    {
+      "path": "/users",
+      "methods": ["GET", "POST"],
+      "description": "User management endpoints",
+      "parameters": {
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "description": "Page number for pagination"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20,
+          "description": "Items per page"
+        },
+        "sort": {
+          "type": "string",
+          "default": "created_at",
+          "description": "Field to sort by"
+        }
+      }
+    },
+    {
+      "path": "/files",
+      "methods": ["GET", "POST", "DELETE"],
+      "description": "File management endpoints",
+      "parameters": {
+        "type": {
+          "type": "string",
+          "description": "Filter by file type"
+        },
+        "size": {
+          "type": "string",
+          "description": "Filter by file size (e.g. >1MB)"
+        }
+      }
+    },
+    {
+      "path": "/tags",
+      "methods": ["GET"],
+      "description": "Tag management endpoints",
+      "parameters": {
+        "category": {
+          "type": "string",
+          "description": "Filter tags by category"
+        }
+      }
+    }
+  ],
+  "schemas": {
+    "User": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "File": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string" },
+        "size": { "type": "integer" },
+        "type": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "Tag": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string" }
+      }
+    }
+  }
+}

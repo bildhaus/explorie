@@ -1,0 +1,20 @@
+{
+  "id": "git",
+  "name": "Git",
+  "version": "0.0.1",
+  "protocolVersion": 1,
+  "description": "Local repository status and GitHub links.",
+  "executables": {
+    "x86_64-pc-windows-msvc": "explorie-plugin-git.exe",
+    "aarch64-apple-darwin": "explorie-plugin-git"
+  },
+  "capabilities": [
+    "Read local repository metadata",
+    "Run installed Git with read-only commands",
+    "Open GitHub links on request"
+  ],
+  "dependencies": [
+    "Git executable on PATH"
+  ],
+  "settings": []
+}

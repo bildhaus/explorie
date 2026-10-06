@@ -1,0 +1,11 @@
+[package]
+name = "explorie-plugin-protocol"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Versioned native integration protocol for Explorie"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+

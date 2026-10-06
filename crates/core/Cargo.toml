@@ -1,0 +1,37 @@
+[package]
+name = "explorie-core"
+version = "0.1.0"
+edition = "2024"
+authors = ["explorie contributors"]
+description = "Core business logic for explorie file manager."
+license = "MIT"
+repository = "https://github.com/bildhaus/explorie"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.8", features = ["v4", "v5", "serde"] }
+rayon = "1.10"
+zip = { version = "2.2", default-features = false, features = ["deflate", "bzip2", "zstd", "time", "aes-crypto"] }
+walkdir = "2.5"
+flate2 = "1.0"
+tar = "0.4"
+unrar = "0.5"
+unrar_sys = "0.5"
+widestring = "1"
+# Keep the established source-level crate name while using the maintained fork.
+sevenz-rust = { package = "sevenz-rust2", version = "=0.20.2", features = ["aes256", "compress"] }
+tracing = "0.1"
+trash = "5.2.6"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = { version = "1.10.1", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile = "3.9"

@@ -1,0 +1,53 @@
+{
+  "name": "explorie",
+  "version": "0.0.1",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "description": "Ridiculously fast, fully-hackable file manager.",
+  "repository": "https://github.com/bildhaus/explorie",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "dev": "pnpm run desktop:dev",
+    "dev:watch": "pnpm run desktop:dev:watch",
+    "desktop:dev": "node scripts/prepare-7zip.mjs && cargo run -p explorie-gpui",
+    "desktop:dev:watch": "node scripts/prepare-7zip.mjs && cargo watch -w apps/desktop/gpui -w crates -x \"run -p explorie-gpui\"",
+    "desktop:build": "node scripts/build-desktop.mjs",
+    "desktop:package:windows": "pwsh -NoProfile -File scripts/package-gpui-windows.ps1",
+    "desktop:smoke:release:windows": "pwsh -NoProfile -File scripts/smoke-gpui-release.ps1",
+    "prepare:native": "node scripts/prepare-rclone.mjs && node scripts/prepare-winfsp.mjs && node scripts/prepare-7zip.mjs",
+    "rust:watch": "cargo watch -w apps/desktop/gpui -w apps/cli -w crates -x \"check -p explorie-gpui -p explorie-cli -p explorie-core -p explorie-native-services -p explorie-ffmpeg-wrapper\" -x \"test -p explorie-gpui -p explorie-cli -p explorie-core -p explorie-native-services -p explorie-ffmpeg-wrapper\"",
+    "rust:check": "cargo check --workspace",
+    "lint": "cargo fmt --all --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+    "release:check": "node scripts/release-check.mjs",
+    "release:check:test": "node --test scripts/release-check.test.mjs scripts/prepare-7zip.test.mjs scripts/package-plugins.test.mjs scripts/platform-proof.test.mjs scripts/verify-release-assets.test.mjs scripts/update-signatures.test.mjs",
+    "plugins:package": "node scripts/package-plugins.mjs",
+    "platform:proof:init": "node scripts/platform-proof.mjs init",
+    "platform:proof:verify": "node scripts/platform-proof.mjs verify",
+    "benchmark:progressive-results": "node scripts/benchmark-progressive-results.mjs",
+    "benchmark:large-folder": "node scripts/benchmark-large-folder.mjs",
+    "test": "cargo test --locked --workspace --no-fail-fast",
+    "test:rust": "cargo test --locked --workspace --no-fail-fast",
+    "format": "cargo fmt --all",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.6",
+    "lint-staged": "^15.2.10"
+  },
+  "lint-staged": {
+    "**/*.rs": [
+      "cargo fmt --"
+    ]
+  },
+  "pnpm": {
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ]
+    }
+  }
+}

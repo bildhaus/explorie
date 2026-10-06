@@ -1,0 +1,819 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish this tag after real-machine validation
+        type: boolean
+        required: true
+        default: false
+      windows_real_machine_verified:
+        description: Windows installer, folder-handler toggle/reversal, remote drives, opt-in bundled plugins, and disposable filesystem operations passed
+        type: boolean
+        required: true
+        default: false
+      macos_real_machine_verified:
+        description: Signed/notarized macOS install, launch, bundled plugin execution, and disposable filesystem operations passed
+        type: boolean
+        required: true
+        default: false
+      windows_sha256:
+        description: SHA-256 of the exact Windows installer tested on a real machine
+        type: string
+        required: false
+        default: ''
+      macos_sha256:
+        description: SHA-256 of the exact macOS DMG tested on a real machine
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate release source
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Validate publication attestation
+        if: inputs.publish == true
+        shell: bash
+        env:
+          WINDOWS_SHA256: ${{ inputs.windows_sha256 }}
+          MACOS_SHA256: ${{ inputs.macos_sha256 }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "Publication must be dispatched from the validated version tag."
+            exit 1
+          fi
+          if [ "${{ inputs.windows_real_machine_verified }}" != "true" ] || [ "${{ inputs.macos_real_machine_verified }}" != "true" ]; then
+            echo "Both candidate packages require real-machine filesystem-operation attestation."
+            exit 1
+          fi
+          if ! [[ "$WINDOWS_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || ! [[ "$MACOS_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "Publication requires the SHA-256 hashes of both exact tested artifacts."
+            exit 1
+          fi
+
+      - name: Validate release state
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PUBLISH: ${{ inputs.publish || false }}
+        run: |
+          set -euo pipefail
+          state=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+          if [ "$EVENT_NAME" = "push" ] && [ "$state" != "missing" ]; then
+            echo "Release $GITHUB_REF_NAME already exists; refusing to replace it."
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$PUBLISH" = "true" ] && [ "$state" != "true" ]; then
+            echo "Release $GITHUB_REF_NAME must exist as a draft before publication."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify tagged commit passed main CI
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Release tags must point to a commit already present on main."
+            exit 1
+          fi
+          passed=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml \
+            --commit "$GITHUB_SHA" \
+            --event push \
+            --status success \
+            --limit 1 \
+            --json conclusion \
+            --jq 'length')
+          if [ "$passed" != "1" ]; then
+            echo "The tagged commit has no successful main-push CI run."
+            exit 1
+          fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: '9.15.9'
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24.19.0'
+
+      - name: Test release checks
+        run: pnpm release:check:test
+
+      - name: Validate version and source contract
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: node scripts/release-check.mjs --preflight
+
+  build-windows:
+    name: Package Windows
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '20.20.2'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: './ -> target'
+          # Same key as the CI job on main, whose caches tag runs can read.
+          # Release refs only restore: caches are saved from main alone.
+          shared-key: desktop-windows
+          save-if: false
+
+      - name: Prepare native dependencies
+        run: |
+          node scripts/prepare-rclone.mjs
+          node scripts/prepare-winfsp.mjs
+          node scripts/prepare-7zip.mjs
+
+      - name: Test native file operations on Windows
+        run: cargo test --locked -p explorie-core
+
+      - name: Build and package official Windows plugins
+        shell: pwsh
+        run: |
+          node scripts/package-plugins.mjs --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "Plugin packaging failed." }
+          $catalog = Join-Path $PWD "release-artifacts/plugins-x86_64-pc-windows-msvc/explorie-plugin-catalog-x86_64-pc-windows-msvc.json"
+          "EXPLORIE_PLUGIN_CATALOG=$catalog" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build GPUI Windows application
+        shell: pwsh
+        run: |
+          cargo build -p explorie-gpui --release --locked
+          if ($LASTEXITCODE -ne 0) { throw "GPUI release build failed." }
+          Copy-Item -LiteralPath "apps/desktop/native-assets/binaries/rclone-x86_64-pc-windows-msvc.exe" -Destination "target/release/rclone.exe" -Force
+
+      - name: Verify bundled native dependencies
+        shell: pwsh
+        run: |
+          $rclone = "target/release/rclone.exe"
+          if (-not (Test-Path -LiteralPath $rclone -PathType Leaf)) { throw "Bundled rclone executable was not built." }
+          $version = & $rclone version | Select-Object -First 1
+          if ($version -ne "rclone v1.74.4") { throw "Unexpected bundled rclone version: $version" }
+          $winfsp = "apps/desktop/native-assets/resources/winfsp-2.1.25156.msi"
+          if (-not (Test-Path -LiteralPath $winfsp -PathType Leaf)) { throw "Bundled WinFsp installer was not prepared." }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $winfsp).Hash.ToLowerInvariant()
+          if ($hash -ne "073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a") { throw "WinFsp installer hash mismatch." }
+          $signature = Get-AuthenticodeSignature -LiteralPath $winfsp
+          if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "NAVIMATICS") {
+            throw "WinFsp installer signature is invalid."
+          }
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $iscc) { throw "The runner image does not provide Inno Setup 6." }
+          pwsh -NoProfile -File scripts/package-gpui-windows.ps1 -IsccPath $iscc
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer packaging failed." }
+
+      - name: Stage unsigned Windows installer and checksum
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $installer = "release-artifacts/windows/explorie-$version-windows-x64-setup.exe"
+          if ((Get-AuthenticodeSignature -LiteralPath $installer).Status -ne "NotSigned") {
+            throw "Unsigned installer has an unexpected Authenticode status."
+          }
+          $unsigned = "release-artifacts/windows/explorie-$version-windows-x64-setup-unsigned.exe"
+          Move-Item -LiteralPath $installer -Destination $unsigned
+          $installer = $unsigned
+
+          $staging = "release-artifacts/windows"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          "$hash *$(Split-Path $installer -Leaf)" | Set-Content -Encoding ascii (Join-Path $staging "SHA256SUMS-windows.txt")
+
+      - name: Download previous Windows installer when available
+        id: previous-windows
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          try {
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
+          } catch {
+            if ([int]$_.Exception.Response.StatusCode -ne 404) { throw }
+            $release = $null
+          }
+          $assets = @($release.assets | Where-Object { $_.name -like "explorie-*-windows-x64-setup-unsigned.exe" })
+          if ($assets.Count -gt 1) { throw "The latest release has multiple Windows installer assets." }
+          if ($assets.Count -eq 1) {
+            if ($assets[0].digest -cnotmatch '^sha256:[a-f0-9]{64}$') { throw "The previous Windows installer has no valid SHA-256 digest." }
+            $expected = $assets[0].digest.Substring(7)
+            $destination = Join-Path $env:RUNNER_TEMP $assets[0].name
+            gh release download $release.tag_name --repo $env:GITHUB_REPOSITORY --pattern $assets[0].name --output $destination
+            if ($LASTEXITCODE -ne 0) { throw "The previous Windows installer could not be downloaded." }
+            if ((Get-Item -LiteralPath $destination).Length -ne $assets[0].size) { throw "The previous Windows installer size does not match." }
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "The previous Windows installer checksum does not match." }
+            "path=$destination" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Output "No previous Windows installer exists; this release will establish the upgrade baseline."
+          }
+
+      - name: Smoke test Windows installer
+        shell: pwsh
+        env:
+          PREVIOUS_INSTALLER: ${{ steps.previous-windows.outputs.path }}
+        run: |
+          $installer = @(Get-ChildItem release-artifacts/windows/*-windows-x64-setup*.exe)
+          if ($installer.Count -ne 1) { throw "Expected exactly one Windows installer." }
+          $installDir = Join-Path $env:RUNNER_TEMP "explorie-installed"
+          $profile = Join-Path ([IO.Path]::GetTempPath()) "explorie-upgrade-profile"
+          New-Item -ItemType Directory -Path $profile -Force | Out-Null
+          $upgradeExpected = $false
+          if ($env:PREVIOUS_INSTALLER) {
+            $previous = Start-Process -FilePath $env:PREVIOUS_INSTALLER -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir") -Wait -PassThru
+            if ($previous.ExitCode -ne 0) { throw "Previous installer exited with code $($previous.ExitCode)." }
+            $previousApp = Join-Path $installDir "Explorie.exe"
+            if (-not (Test-Path -LiteralPath $previousApp -PathType Leaf)) { throw "Previous Explorie executable was not installed." }
+            pwsh -NoProfile -File scripts/smoke-gpui-release.ps1 -Executable $previousApp -ProfilePath $profile
+            if ($LASTEXITCODE -ne 0) { throw "Previous installed GPUI smoke check failed." }
+            $settingsPath = Join-Path $profile "settings-v1.json"
+            if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { throw "Previous Explorie did not create real settings state." }
+            $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+            $settings.appearance.theme = "light"
+            $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $settingsPath -Encoding utf8
+            $upgradeExpected = $true
+          }
+          $install = Start-Process -FilePath $installer[0].FullName -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer exited with code $($install.ExitCode)." }
+          $app = Join-Path $installDir "Explorie.exe"
+          $rclone = Join-Path $installDir "rclone.exe"
+          try {
+            node scripts/package-plugins.mjs --verify-catalog $env:EXPLORIE_PLUGIN_CATALOG --target x86_64-pc-windows-msvc --verify-directory (Join-Path $installDir "plugins")
+            if ($LASTEXITCODE -ne 0) { throw "Installed plugin packages failed integrity verification." }
+            $env:EXPLORIE_PLUGIN_SMOKE_CATALOG = $env:EXPLORIE_PLUGIN_CATALOG
+            $env:EXPLORIE_PLUGIN_SMOKE_DIRECTORY = Join-Path $installDir "plugins"
+            cargo test --locked -p explorie-native-services plugins::tests::official_bundled_packages_install_and_execute_through_native_manager -- --ignored --exact --nocapture
+            if ($LASTEXITCODE -ne 0) { throw "Installed plugin offline execution smoke failed." }
+            node scripts/smoke-7zip.mjs (Join-Path $installDir "7zip/7z.exe")
+            if ($LASTEXITCODE -ne 0) { throw "Installed 7-Zip archive smoke failed." }
+            node scripts/prepare-7zip.mjs --verify-source (Join-Path $installDir "licenses/7z2603-src.tar.xz")
+            if ($LASTEXITCODE -ne 0) { throw "Installed 7-Zip source failed integrity verification." }
+            foreach ($notice in @("7zip-LICENSE.txt", "7zip-COPYING.txt", "7zip-NOTICE.txt")) {
+              if (-not (Test-Path -LiteralPath (Join-Path $installDir "licenses/$notice") -PathType Leaf)) { throw "Installed 7-Zip notice is missing: $notice" }
+            }
+            if (-not (Test-Path -LiteralPath $app -PathType Leaf)) { throw "Installed Explorie executable was not found." }
+            if (-not (Test-Path -LiteralPath $rclone -PathType Leaf)) { throw "Installed rclone executable was not found." }
+            pwsh -NoProfile -File scripts/smoke-gpui-release.ps1 -Executable $app -ProfilePath $profile
+            if ($LASTEXITCODE -ne 0) { throw "Installed GPUI smoke check failed." }
+            if ($upgradeExpected) {
+              $preserved = Get-Content -LiteralPath (Join-Path $profile "settings-v1.json") -Raw | ConvertFrom-Json
+              if ($preserved.appearance.theme -ne "light") { throw "Real Explorie settings did not survive the installer upgrade." }
+            }
+            $version = & $rclone version | Select-Object -First 1
+            if ($version -ne "rclone v1.74.4") { throw "Unexpected installed rclone version: $version" }
+            $updateCopy = Join-Path $env:RUNNER_TEMP "explorie-update-windows-x64-setup-unsigned.exe"
+            Copy-Item -LiteralPath $installer[0].FullName -Destination $updateCopy -Force
+            $env:EXPLORIE_TEST_CONFIG_DIR = $profile
+            $oldProcess = Start-Process -FilePath $app -PassThru
+            Start-Sleep -Seconds 2
+            if ($oldProcess.HasExited) { throw "Installed Explorie exited before the updater smoke test." }
+            $updateInstall = Start-Process -FilePath $updateCopy -ArgumentList @("/SP-", "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RELAUNCHEXPLORIE", "/DIR=$installDir") -PassThru
+            $updateInstall.WaitForExit()
+            if ($updateInstall.ExitCode -ne 0) { throw "Updater installer exited with code $($updateInstall.ExitCode)." }
+            $reopened = $null
+            for ($attempt = 0; $attempt -lt 120; $attempt++) {
+              $reopened = @(Get-Process -Name Explorie -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $oldProcess.Id -and $_.Path -eq $app -and $_.MainWindowHandle -ne 0 }) | Select-Object -First 1
+              if ($reopened -and -not (Test-Path -LiteralPath $updateCopy)) { break }
+              Start-Sleep -Milliseconds 250
+            }
+            if (Test-Path -LiteralPath $updateCopy) {
+              throw "The Windows updater did not remove its installer payload."
+            }
+            if (-not $reopened) { throw "The updated Windows app did not reopen." }
+            Stop-Process -Id $reopened.Id -Force -ErrorAction SilentlyContinue
+          } finally {
+            $uninstaller = Join-Path $installDir "unins000.exe"
+            if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
+              $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
+              if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with code $($uninstall.ExitCode)." }
+            }
+          }
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: explorie-installer-windows
+          path: release-artifacts/windows/*
+          if-no-files-found: error
+
+  build-macos:
+    name: Package macOS
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: validate
+    runs-on: macos-latest
+    timeout-minutes: 45
+    environment: release-signing
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '20.20.2'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
+          targets: aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: './ -> target'
+          # Same key as the CI job on main, whose caches tag runs can read.
+          # Release refs only restore: caches are saved from main alone.
+          shared-key: desktop-macos
+          save-if: false
+
+      - name: Verify CoreText glyphs reach the Metal renderer
+        env:
+          EXPLORIE_RENDER_PROBE_OUTPUT: target/macos-render-probe.png
+        run: cargo run --locked -p explorie-gpui --example macos_render_probe
+
+      - name: Upload macOS rendering proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-render-probe
+          path: target/macos-render-probe.png
+          if-no-files-found: warn
+
+      - name: Check Apple signing prerequisites
+        id: signing
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for value in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!value}" ]; then
+              echo "Tagged releases require $value."
+              exit 1
+            fi
+          done
+          echo "identity=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
+
+      - name: Import Apple signing certificate
+        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Build, sign, and notarize official macOS plugins
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.signing.outputs.identity }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          target=aarch64-apple-darwin
+          cargo build --release --locked --target "$target" -p explorie-plugin-syncthing -p explorie-plugin-git -p explorie-plugin-obsidian
+          for plugin in syncthing git obsidian; do
+            binary="target/$target/release/explorie-plugin-$plugin"
+            codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$binary"
+            codesign --verify --strict --verbose=2 "$binary"
+            codesign -d --verbose=4 "$binary" 2>&1 | grep -Fx "TeamIdentifier=$APPLE_TEAM_ID"
+          done
+          node scripts/package-plugins.mjs --target "$target" --no-build
+          mkdir -p "$RUNNER_TEMP/plugin-notarization"
+          version=$(node -p "require('./package.json').version")
+          for plugin in syncthing git obsidian; do
+            archive="release-artifacts/plugins-$target/explorie-plugin-$plugin-$version-$target.zip"
+            proof="$RUNNER_TEMP/plugin-notarization/$plugin.json"
+            xcrun notarytool submit "$archive" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait --output-format json > "$proof"
+            node -e 'const p=require(process.argv[1]); if(p.status!=="Accepted") process.exit(1)' "$proof"
+            extracted="$RUNNER_TEMP/plugin-notarization/$plugin"
+            mkdir -p "$extracted"
+            ditto -x -k "$archive" "$extracted"
+            # Standalone tools require a notarization check, not an app-bundle assessment.
+            codesign --verify --strict --verbose=4 -R="notarized" --check-notarization "$extracted/explorie-plugin-$plugin"
+          done
+          # ZIPs and bare command-line executables cannot carry stapled tickets.
+          # Keep notarized bytes unchanged; Gatekeeper retrieves their tickets.
+          catalog="$PWD/release-artifacts/plugins-$target/explorie-plugin-catalog-$target.json"
+          node scripts/package-plugins.mjs --verify-catalog "$catalog" --target "$target"
+          echo "EXPLORIE_PLUGIN_CATALOG=$catalog" >> "$GITHUB_ENV"
+
+      - name: Upload macOS plugin notarization proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-plugin-notarization
+          path: ${{ runner.temp }}/plugin-notarization/*.json
+          if-no-files-found: error
+
+      - name: Build GPUI macOS app and DMG
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.signing.outputs.identity }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          EXPLORIE_MACOS_TARGET: aarch64-apple-darwin
+        run: |
+          node scripts/prepare-rclone.mjs aarch64-apple-darwin
+          node scripts/prepare-7zip.mjs aarch64-apple-darwin
+          cargo build -p explorie-gpui --release --locked --target aarch64-apple-darwin
+          bash scripts/package-gpui-macos.sh
+
+      - name: Notarize and staple macOS DMG
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.signing.outputs.identity }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          app="target/release/bundle/macos/explorie.app"
+          app_zip="$RUNNER_TEMP/explorie-notarization.zip"
+          test -d "$app"
+          ditto -c -k --keepParent "$app" "$app_zip"
+          xcrun notarytool submit "$app_zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$app"
+
+          dmgs=(target/release/bundle/dmg/*.dmg)
+          if [ "${#dmgs[@]}" -ne 1 ]; then
+            echo "Expected exactly one DMG, found ${#dmgs[@]}."
+            exit 1
+          fi
+          dmg_root="target/release/bundle/dmg-root"
+          rm -rf "$dmg_root/explorie.app"
+          ditto "$app" "$dmg_root/explorie.app"
+          rm -f "${dmgs[0]}"
+          hdiutil create \
+            -volname explorie \
+            -srcfolder "$dmg_root" \
+            -ov \
+            -format UDZO \
+            "${dmgs[0]}"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "${dmgs[0]}"
+          codesign --verify --verbose=2 "${dmgs[0]}"
+          xcrun notarytool submit "${dmgs[0]}" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "${dmgs[0]}"
+
+      - name: Verify and stage macOS package
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(target/release/bundle/dmg/*.dmg)
+          if [ "${#dmgs[@]}" -ne 1 ]; then
+            echo "Expected exactly one DMG, found ${#dmgs[@]}."
+            exit 1
+          fi
+
+          mount_point=$(mktemp -d)
+          hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_point" >/dev/null
+          cleanup() {
+            hdiutil detach "$mount_point" -quiet || true
+            rmdir "$mount_point" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          apps=("$mount_point"/*.app)
+          if [ "${#apps[@]}" -ne 1 ]; then
+            echo "Expected exactly one app in the DMG."
+            exit 1
+          fi
+          app="${apps[0]}"
+          helper="$app/Contents/Resources/explorie-mountd"
+          rclone="$app/Contents/MacOS/rclone"
+          sevenzip="$app/Contents/Resources/7zip/7zz"
+          rclone_license="$app/Contents/Resources/licenses/rclone-COPYING"
+          pixelarticons_license="$app/Contents/Resources/licenses/pixelarticons-LICENSE.txt"
+          assimp_license="$app/Contents/Resources/licenses/assimp-LICENSE.txt"
+          helper_plist="$app/Contents/Library/LaunchDaemons/com.omershatz.explorie.mountd.plist"
+          test -x "$helper"
+          test -x "$rclone"
+          test -x "$sevenzip"
+          node scripts/package-plugins.mjs --verify-catalog "$EXPLORIE_PLUGIN_CATALOG" --target aarch64-apple-darwin --verify-directory "$app/Contents/Resources/plugins"
+          node scripts/smoke-7zip.mjs "$sevenzip"
+          node scripts/prepare-7zip.mjs --verify-source "$app/Contents/Resources/licenses/7z2603-src.tar.xz"
+          for notice in 7zip-LICENSE.txt 7zip-COPYING.txt 7zip-NOTICE.txt; do
+            test -f "$app/Contents/Resources/licenses/$notice"
+          done
+          test -f "$rclone_license"
+          test -f "$pixelarticons_license"
+          test -f "$assimp_license"
+          test -f "$helper_plist"
+          test "$("$rclone" version | head -n 1)" = 'rclone v1.74.4'
+          /usr/libexec/PlistBuddy -c 'Print :BundleProgram' "$helper_plist" | grep -Fx 'Contents/Resources/explorie-mountd'
+          /usr/libexec/PlistBuddy -c 'Print :AssociatedBundleIdentifiers:0' "$helper_plist" | grep -Fx 'com.omershatz.explorie'
+          codesign --verify --strict --verbose=2 "$helper"
+          codesign --verify --strict --verbose=2 "$rclone"
+          codesign --verify --strict --verbose=2 "$sevenzip"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --verify --verbose=2 "${dmgs[0]}"
+          codesign -d --verbose=4 "$helper" 2>&1 | grep -Fx 'Identifier=com.omershatz.explorie.mountd'
+          codesign -d --verbose=4 "$app" 2>&1 | grep -Fx 'Identifier=com.omershatz.explorie'
+          codesign -d --verbose=4 "$helper" 2>&1 | grep -E 'flags=.*runtime'
+          codesign -d --verbose=4 "$app" 2>&1 | grep -E 'flags=.*runtime'
+          codesign -d --verbose=4 "$helper" 2>&1 | grep -Fx "TeamIdentifier=$APPLE_TEAM_ID"
+          codesign -d --verbose=4 "$rclone" 2>&1 | grep -Fx "TeamIdentifier=$APPLE_TEAM_ID"
+          codesign -d --verbose=4 "$sevenzip" 2>&1 | grep -Fx "TeamIdentifier=$APPLE_TEAM_ID"
+          codesign -d --verbose=4 "$app" 2>&1 | grep -Fx "TeamIdentifier=$APPLE_TEAM_ID"
+
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            xcrun stapler validate "$app"
+            xcrun stapler validate "${dmgs[0]}"
+            spctl --assess --type execute --verbose=2 "$app"
+            spctl --assess --type open --context context:primary-signature --verbose=2 "${dmgs[0]}"
+          fi
+          cleanup
+          trap - EXIT
+
+          version=$(node -p "require('./package.json').version")
+          mkdir -p release-artifacts/macos
+          asset="release-artifacts/macos/explorie-$version-macos-arm64.dmg"
+          cp "${dmgs[0]}" "$asset"
+          (cd release-artifacts/macos && shasum -a 256 "$(basename "$asset")" > SHA256SUMS-macos.txt)
+
+      - name: Smoke test macOS automatic replacement and cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          source_app="target/release/bundle/macos/explorie.app"
+          installed_root="$HOME/Applications"
+          installed_app="$installed_root/explorie-updater-smoke-$GITHUB_RUN_ID.app"
+          cache="$HOME/Library/Caches/explorie/updates"
+          payload="$cache/explorie-$version-macos-arm64.dmg"
+          mkdir -p "$installed_root" "$cache"
+          rm -rf "$installed_app"
+          ditto "$source_app" "$installed_app"
+          cp "release-artifacts/macos/explorie-$version-macos-arm64.dmg" "$payload"
+          payload_hash=$(shasum -a 256 "$payload" | cut -d' ' -f1)
+          payload_size=$(stat -f '%z' "$payload")
+          binary="$installed_app/Contents/MacOS/explorie-gpui"
+
+          "$binary" --apply-macos-update "$payload" "$version" "$payload_hash" "$payload_size" 0
+
+          test -d "$installed_app"
+          test ! -e "$payload"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$installed_app/Contents/Info.plist")" = "$version"
+          codesign --verify --deep --strict --verbose=2 "$installed_app"
+          if find "$installed_root" -maxdepth 1 \( -name '.explorie-backup-*.app' -o -name '.explorie-update-*.app' \) | grep -q .; then
+            echo "The macOS updater left a staged or backup app behind."
+            exit 1
+          fi
+          reopened=false
+          for _ in {1..40}; do
+            if pgrep -f -- "$binary" >/dev/null; then
+              reopened=true
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$reopened" != true ]; then
+            echo "The updated macOS app did not reopen."
+            exit 1
+          fi
+          pkill -TERM -f -- "$binary" || true
+          rm -rf "$installed_app"
+
+      - name: Smoke test macOS DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(target/release/bundle/dmg/*.dmg)
+          if [ "${#dmgs[@]}" -ne 1 ]; then exit 1; fi
+
+          mount_point=$(mktemp -d)
+          hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_point" >/dev/null
+          cleanup() { hdiutil detach "$mount_point" -quiet || true; }
+          trap cleanup EXIT
+
+          apps=("$mount_point"/*.app)
+          if [ "${#apps[@]}" -ne 1 ]; then
+            echo "Expected exactly one app in the DMG."
+            exit 1
+          fi
+          installed_app="$RUNNER_TEMP/explorie-smoke-$GITHUB_RUN_ID.app"
+          ditto "${apps[0]}" "$installed_app"
+          cleanup
+          trap - EXIT
+
+          binary="$installed_app/Contents/MacOS/explorie-gpui"
+          rclone="$installed_app/Contents/MacOS/rclone"
+          node scripts/package-plugins.mjs --verify-catalog "$EXPLORIE_PLUGIN_CATALOG" --target aarch64-apple-darwin --verify-directory "$installed_app/Contents/Resources/plugins"
+          export EXPLORIE_PLUGIN_SMOKE_CATALOG="$EXPLORIE_PLUGIN_CATALOG"
+          export EXPLORIE_PLUGIN_SMOKE_DIRECTORY="$installed_app/Contents/Resources/plugins"
+          cargo test --locked -p explorie-native-services plugins::tests::official_bundled_packages_install_and_execute_through_native_manager -- --ignored --exact --nocapture
+          node scripts/smoke-7zip.mjs "$installed_app/Contents/Resources/7zip/7zz"
+          node scripts/prepare-7zip.mjs --verify-source "$installed_app/Contents/Resources/licenses/7z2603-src.tar.xz"
+          if [ ! -x "$binary" ]; then
+            echo "Installed application executable was not found."
+            exit 1
+          fi
+          test -x "$rclone"
+          test "$("$rclone" version | head -n 1)" = 'rclone v1.74.4'
+          "$binary" >"$RUNNER_TEMP/explorie-smoke.log" 2>&1 &
+          app_pid=$!
+          sleep 8
+          if ! kill -0 "$app_pid" 2>/dev/null; then
+            cat "$RUNNER_TEMP/explorie-smoke.log"
+            echo "Installed application exited during launch smoke test."
+            exit 1
+          fi
+          kill "$app_pid"
+          wait "$app_pid" || true
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: explorie-installer-macos
+          path: release-artifacts/macos/*
+          if-no-files-found: error
+
+  candidate:
+    name: Create draft candidate release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [validate, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # UPDATE_SIGNING_KEY lives with the other release-signing secrets.
+    environment: release-signing
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '20.20.2'
+
+      - name: Download candidate packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: explorie-installer-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Verify packages, create the draft and sign update payloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          UPDATE_SIGNING_KEY_PASSWORD: ${{ secrets.UPDATE_SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          version="${GITHUB_REF_NAME#v}"
+          windows="explorie-$version-windows-x64-setup-unsigned.exe"
+          macos="explorie-$version-macos-arm64.dmg"
+          for asset in "$windows" "$macos" SHA256SUMS-windows.txt SHA256SUMS-macos.txt; do
+            test -f "$asset"
+          done
+          if [ "$(find . -maxdepth 1 -type f | wc -l | tr -d ' ')" != "4" ]; then
+            echo "Candidate staging must contain two installers and their internal build checksums."
+            exit 1
+          fi
+          sha256sum --check SHA256SUMS-windows.txt
+          sha256sum --check SHA256SUMS-macos.txt
+          gh release create "$GITHUB_REF_NAME" "$windows" "$macos" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
+          cd ..
+          # Detached ed25519 signatures travel as machine-readable lines in the
+          # release notes, keeping the release at exactly two assets. The script
+          # fails when the checked-in update public key and UPDATE_SIGNING_KEY
+          # disagree, and leaves the notes untouched when neither is configured.
+          notes="$RUNNER_TEMP/candidate-notes.md"
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$notes"
+          node scripts/update-signatures.mjs sign --notes "$notes" "release-artifacts/$windows" "release-artifacts/$macos"
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file "$notes"
+          release_id=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json databaseId --jq '.databaseId')
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/candidate-release.json"
+          node scripts/verify-release-assets.mjs "$RUNNER_TEMP/candidate-release.json" release-artifacts "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+
+  publish:
+    name: Publish verified draft release
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref_type == 'tag' &&
+      inputs.publish == true &&
+      inputs.windows_real_machine_verified == true &&
+      inputs.macos_real_machine_verified == true
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release-publish
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '20.20.2'
+
+      - name: Download and verify draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_ATTESTED_SHA256: ${{ inputs.windows_sha256 }}
+          MACOS_ATTESTED_SHA256: ${{ inputs.macos_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir release-artifacts
+          version="${GITHUB_REF_NAME#v}"
+          windows="explorie-$version-windows-x64-setup-unsigned.exe"
+          macos="explorie-$version-macos-arm64.dmg"
+          release_id=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json databaseId --jq '.databaseId')
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/draft-release.json"
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$windows" \
+            --pattern "$macos" \
+            --dir release-artifacts
+          node scripts/verify-release-assets.mjs "$RUNNER_TEMP/draft-release.json" release-artifacts "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" --attested
+
+      - name: Publish the verified draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          gh release verify "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"

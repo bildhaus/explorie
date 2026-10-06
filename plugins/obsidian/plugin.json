@@ -1,0 +1,26 @@
+{
+  "id": "obsidian",
+  "name": "Obsidian",
+  "version": "0.0.1",
+  "protocolVersion": 1,
+  "description": "Recognize vaults and open notes in Obsidian.",
+  "executables": {
+    "x86_64-pc-windows-msvc": "explorie-plugin-obsidian.exe",
+    "aarch64-apple-darwin": "explorie-plugin-obsidian"
+  },
+  "capabilities": [
+    "Read vault markers",
+    "Open Obsidian links and copy links on request"
+  ],
+  "dependencies": [
+    "Obsidian for opening vaults and notes"
+  ],
+  "settings": [
+    {
+      "key": "vaultRoot",
+      "label": "Custom vault root",
+      "kind": "directory",
+      "description": "Optional vault root for a custom Obsidian configuration folder."
+    }
+  ]
+}

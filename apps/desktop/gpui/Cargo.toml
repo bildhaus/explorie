@@ -1,0 +1,69 @@
+[package]
+name = "explorie-gpui"
+version = "0.0.1"
+edition = "2024"
+authors = ["explorie contributors"]
+description = "Native GPUI desktop application for explorie"
+license = "MIT"
+repository = "https://github.com/bildhaus/explorie"
+
+[features]
+default = ["full-previews"]
+# Every optional preview backend of explorie-native-services; release builds
+# ship all of them. `--no-default-features` builds the app without them (no
+# CMake needed), and each one can be re-enabled on its own.
+full-previews = ["preview-3d", "preview-audio", "preview-columnar", "preview-fonts", "preview-mail", "preview-sqlite"]
+preview-3d = ["explorie-native-services/preview-3d"]
+preview-audio = ["explorie-native-services/preview-audio"]
+preview-columnar = ["explorie-native-services/preview-columnar"]
+preview-fonts = ["explorie-native-services/preview-fonts"]
+preview-mail = ["explorie-native-services/preview-mail"]
+preview-sqlite = ["explorie-native-services/preview-sqlite"]
+# Compile Metal shaders at runtime instead of with Xcode's `metal` tool, for
+# local builds on machines that only have the Command Line Tools installed.
+runtime-shaders = ["gpui_platform/runtime_shaders"]
+
+[dependencies]
+explorie-plugin-protocol = { path = "../../../crates/plugin-protocol" }
+explorie-core = { path = "../../../crates/core" }
+explorie-native-services = { path = "../../../crates/native-services", default-features = false }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "76659a55a8c10ed355a070f8764a0b1733e3c115", default-features = false }
+image = { version = "0.25.1", default-features = false, features = ["png"] }
+dirs = "5.0.1"
+chrono = "0.4"
+regex = "1.11"
+raw-window-handle = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.8", features = ["v4"] }
+unicode-segmentation = "1.12"
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+drag = "2.1.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "=0.26.0"
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "76659a55a8c10ed355a070f8764a0b1733e3c115", features = ["font-kit"] }
+libc = "0.2"
+objc = "0.2"
+
+[target.'cfg(all(not(target_os = "windows"), not(target_os = "macos")))'.dependencies]
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "76659a55a8c10ed355a070f8764a0b1733e3c115" }
+
+[target.'cfg(windows)'.dependencies]
+gpui_windows = { git = "https://github.com/zed-industries/zed", rev = "76659a55a8c10ed355a070f8764a0b1733e3c115", default-features = false }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+image = { version = "0.25.1", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3.0.2"
+ico = "0.4.0"
+
+[dev-dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "76659a55a8c10ed355a070f8764a0b1733e3c115", default-features = false, features = ["test-support"] }
+pollster = "0.2.5"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "76659a55a8c10ed355a070f8764a0b1733e3c115", features = ["font-kit", "test-support"] }

@@ -1,0 +1,27 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One reviewable PR per week for semver-compatible bumps; major bumps
+      # still arrive as individual PRs.
+      cargo-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # GPUI is pinned to one zed-industries/zed git revision. Bump all three
+      # crates together by hand and re-verify both desktop platforms.
+      - dependency-name: gpui
+      - dependency-name: gpui_platform
+      - dependency-name: gpui_windows

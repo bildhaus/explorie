@@ -1,0 +1,10 @@
+[package]
+name = "explorie-ffmpeg-wrapper"
+version = "0.1.0"
+edition = "2024"
+authors = ["explorie contributors"]
+description = "FFmpeg dynamic-link helper for explorie"
+license = "MIT"
+repository = "https://github.com/bildhaus/explorie"
+
+[dependencies]

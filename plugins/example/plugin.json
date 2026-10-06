@@ -1,0 +1,14 @@
+{
+  "id": "example",
+  "name": "Example integration",
+  "version": "0.1.0",
+  "protocolVersion": 1,
+  "description": "A minimal local developer integration.",
+  "executables": {
+    "x86_64-pc-windows-msvc": "explorie-plugin-example.exe",
+    "aarch64-apple-darwin": "explorie-plugin-example"
+  },
+  "capabilities": ["Read the folder context supplied by Explorie"],
+  "dependencies": [],
+  "settings": []
+}

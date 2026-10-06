@@ -1,0 +1,69 @@
+# cargo-deny policy: https://embarkstudios.github.io/cargo-deny/
+# Run locally with `cargo deny --locked check`. PR CI runs `check bans licenses
+# sources`; the weekly Scheduled Security Audit workflow runs `check advisories`.
+
+[graph]
+# Only the platforms Explorie ships (plus Linux, which CI compiles) matter for
+# licenses and advisories; this keeps wasm/Android-only crates out of the report.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+all-features = false
+
+[advisories]
+# Vulnerabilities always fail. Unmaintained/unsound findings fail only for
+# direct dependencies; `cargo audit` still lists transitive ones as warnings.
+# PR CI leaves advisories to `cargo audit`; the scheduled Security Audit
+# workflow runs `cargo deny check advisories` against this policy.
+unmaintained = "workspace"
+unsound = "workspace"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Every license here permits distributing Explorie's binaries under MIT.
+# MPL-2.0 is file-level copyleft: fine as long as those crates stay unmodified
+# (or their modified files are published).
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "bzip2-1.0.6",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "NCSA",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.93
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = false
+
+[bans]
+# Duplicate versions are common in the GPUI tree; surface them without failing.
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# GPUI is consumed from the zed repository, which in turn pins zed-industries
+# forks (font-kit, scap, wgpu) and an upstream proptest commit.
+allow-git = ["https://github.com/proptest-rs/proptest"]
+
+[sources.allow-org]
+github = ["zed-industries"]

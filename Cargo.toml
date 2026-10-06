@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/plugin-protocol",
+    "plugins/syncthing",
+    "plugins/git",
+    "plugins/obsidian",
+    "crates/core",
+    "crates/native-services",
+    "crates/ffmpeg-wrapper",
+    "apps/cli",
+    "apps/desktop/gpui"
+]
+# cargo-fuzz targets build on nightly with sanitizer flags; keep them out.
+exclude = ["fuzz"]
+
+# Debug builds: optimize third-party crates (image, PDF, archive, and font
+# decoding are painfully slow at opt-level 0) but keep workspace crates at 0 so
+# incremental rebuilds of Explorie code stay fast.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# Keep unwinding: worker, preview-decoder, and archive code catch panics from
+# untrusted input with `catch_unwind`, which cannot catch anything under "abort".
+panic = "unwind"
+
+# Optimized CI builds for PR/main smoke tests: same code paths as `release`
+# (inherits opt-level, panic, and the build.rs release checks via PROFILE=release)
+# without thin LTO and single-codegen-unit linking, which dominate cold build
+# time. Tagged releases keep building with `--release`.
+[profile.ci]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = false
