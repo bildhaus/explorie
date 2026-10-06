@@ -23,6 +23,10 @@ const INSTALL_CLEANUP_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct SystemIntegrationStatus {
     pub supported: bool,
     pub enabled: bool,
+    /// Why folder opening cannot be routed to Explorie on this system, when
+    /// the platform normally supports it.
+    #[serde(default)]
+    pub unavailable_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -526,19 +530,31 @@ pub fn system_integration_status() -> io::Result<SystemIntegrationStatus> {
         windows_integration::enabled().map(|enabled| SystemIntegrationStatus {
             supported: true,
             enabled,
+            unavailable_reason: None,
         })
     }
     #[cfg(target_os = "macos")]
     {
+        let enabled = macos_folder_integration::enabled();
+        // Still report the setting when it is on, so it can be turned off.
+        if !enabled && !macos_folder_integration::available() {
+            return Ok(SystemIntegrationStatus {
+                supported: false,
+                enabled: false,
+                unavailable_reason: Some(macos_folder_integration::UNAVAILABLE.to_string()),
+            });
+        }
         Ok(SystemIntegrationStatus {
             supported: true,
-            enabled: macos_folder_integration::enabled(),
+            enabled,
+            unavailable_reason: None,
         })
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     Ok(SystemIntegrationStatus {
         supported: false,
         enabled: false,
+        unavailable_reason: None,
     })
 }
 
@@ -766,8 +782,23 @@ mod macos_folder_integration {
     use super::*;
 
     unsafe extern "C" {
+        fn explorie_folder_integration_available() -> i32;
         fn explorie_folder_integration_enabled() -> i32;
         fn explorie_folder_integration_set(enabled: i32) -> i32;
+    }
+
+    pub const UNAVAILABLE: &str = "This version of macOS keeps Finder as the app that opens folders, \
+         and no other app can take that over. To open a folder in Explorie, choose \
+         Open With \u{25b8} explorie in Finder.";
+
+    /// LaunchServices' paramErr: macOS refused to change the folder handler.
+    const PARAM_ERR: i32 = -50;
+
+    /// Whether this macOS version lets an app take over folder opens.
+    pub fn available() -> bool {
+        // SAFETY: The Objective-C bridge has no arguments and returns a plain
+        // integer from the operating-system version.
+        unsafe { explorie_folder_integration_available() != 0 }
     }
 
     pub fn enabled() -> bool {
@@ -782,6 +813,8 @@ mod macos_folder_integration {
         let status = unsafe { explorie_folder_integration_set(i32::from(enabled)) };
         if status == 0 {
             Ok(())
+        } else if status == PARAM_ERR {
+            Err(io::Error::new(io::ErrorKind::Unsupported, UNAVAILABLE))
         } else {
             Err(io::Error::other(format!(
                 "LaunchServices rejected the folder-handler change (OSStatus {status})"

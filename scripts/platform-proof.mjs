@@ -79,10 +79,24 @@ function validatePlatform(proof, platform, version, firstRelease, errors) {
   if (!/^[a-f0-9]{64}$/i.test(candidate.sha256 ?? '')) {
     errors.push(`${platform}: sha256 must be the tested artifact's 64-character digest`);
   }
+  // macOS 26 keeps Finder as the folder handler and refuses every change to
+  // it, so the folder-integration checks may be marked not applicable there,
+  // with the reason recorded and verified in Settings > System Integration.
+  const folderIntegrationUnavailable =
+    platform === 'macos' &&
+    typeof candidate.folderIntegrationUnavailable === 'string' &&
+    candidate.folderIntegrationUnavailable.trim() !== '';
   for (const check of required[platform]) {
     if (
       firstRelease &&
       check === 'automaticUpdateReplacedCleanedAndReopened' &&
+      candidate.checks?.[check] === 'not-applicable'
+    ) {
+      continue;
+    }
+    if (
+      folderIntegrationUnavailable &&
+      (check === 'folderIntegrationEnabled' || check === 'folderIntegrationDisabled') &&
       candidate.checks?.[check] === 'not-applicable'
     ) {
       continue;

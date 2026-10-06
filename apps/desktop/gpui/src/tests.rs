@@ -7986,6 +7986,44 @@ fn operation_history_is_a_bounded_floating_panel_with_minimize_and_close(cx: &mu
     remove_fixture(&directory);
 }
 
+#[test]
+fn new_windows_cascade_from_the_window_they_open_from() {
+    let display = gpui::Bounds::new(
+        gpui::point(px(0.0), px(0.0)),
+        gpui::size(px(1728.0), px(1117.0)),
+    );
+    let centered = gpui::Bounds::new(
+        gpui::point(px(352.0), px(174.0)),
+        gpui::size(px(1024.0), px(768.0)),
+    );
+    let from = |x: f32, y: f32| WorkspaceWindowState {
+        width: Some(1024.0),
+        height: Some(768.0),
+        x: Some(x),
+        y: Some(y),
+    };
+    // Down and to the right of the window it came from, like Finder.
+    let next = cascaded_window_bounds(from(516.0, 300.0), centered, &[display]);
+    assert_eq!(
+        (f32::from(next.origin.x), f32::from(next.origin.y)),
+        (516.0 + NEW_WINDOW_CASCADE, 300.0 + NEW_WINDOW_CASCADE)
+    );
+    assert_eq!(f32::from(next.size.width), 1024.0);
+    // A window already against the bottom-right edge starts a new cascade at
+    // the top-left instead of opening exactly on top of it.
+    let wrapped = cascaded_window_bounds(from(704.0, 349.0), centered, &[display]);
+    assert_eq!(
+        (f32::from(wrapped.origin.x), f32::from(wrapped.origin.y)),
+        (NEW_WINDOW_CASCADE, NEW_WINDOW_CASCADE)
+    );
+    // Without a known position the centered default is used.
+    let unknown = WorkspaceWindowState::default();
+    assert_eq!(
+        cascaded_window_bounds(unknown, centered, &[display]),
+        centered
+    );
+}
+
 #[gpui::test]
 fn go_to_folder_restores_shortcut_autocomplete_validation_recent_and_modal_geometry(
     cx: &mut TestAppContext,

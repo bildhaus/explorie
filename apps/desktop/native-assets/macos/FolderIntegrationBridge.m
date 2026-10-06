@@ -13,6 +13,14 @@ static NSString *ExplorieCurrentFolderHandler(void) {
     return handler == NULL ? nil : CFBridgingRelease(handler);
 }
 
+// Whether this macOS lets an app choose which app opens folders. macOS 26
+// refuses every change to the public.folder handler, even re-applying the
+// current one, with paramErr. This reads the version instead of probing so
+// that merely launching Explorie never writes LaunchServices preferences.
+int32_t explorie_folder_integration_available(void) {
+    return NSProcessInfo.processInfo.operatingSystemVersion.majorVersion < 26 ? 1 : 0;
+}
+
 int32_t explorie_folder_integration_enabled(void) {
     NSString *handler = ExplorieCurrentFolderHandler();
     return [handler isEqualToString:ExplorieBundleIdentifier] ? 1 : 0;

@@ -425,11 +425,18 @@ impl DirectoryWindow {
         }
         session_store.flush();
         let services = self.services.clone();
-        let fallback_bounds = Bounds::centered(
+        let centered = Bounds::centered(
             None,
             gpui::size(px(DEFAULT_WINDOW_WIDTH), px(DEFAULT_WINDOW_HEIGHT)),
             cx,
         );
+        let displays: Vec<_> = cx
+            .displays()
+            .into_iter()
+            .map(|display| display.bounds())
+            .collect();
+        let fallback_bounds =
+            cascaded_window_bounds(self.layout.last_window_bounds, centered, &displays);
         let options = desktop_window_options(fallback_bounds);
         let runtime_for_window = runtime.clone();
         let session_id_for_window = session_id.clone();

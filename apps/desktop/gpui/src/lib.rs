@@ -1098,6 +1098,45 @@ fn watcher_disposition(
     }
 }
 
+/// How far down and right a new window opens from the one it came from, as
+/// Finder cascades its windows.
+pub(crate) const NEW_WINDOW_CASCADE: f32 = 24.0;
+
+/// Bounds for a window opened from one at `from`: offset by the cascade and
+/// kept on screen. When the offset window would be pushed back onto `from`
+/// (a window already at the bottom-right edge), start again near the top-left
+/// of that display.
+pub(crate) fn cascaded_window_bounds(
+    from: WorkspaceWindowState,
+    fallback: gpui::Bounds<gpui::Pixels>,
+    displays: &[gpui::Bounds<gpui::Pixels>],
+) -> gpui::Bounds<gpui::Pixels> {
+    let (Some(x), Some(y)) = (from.x, from.y) else {
+        return fallback;
+    };
+    let offset = WorkspaceWindowState {
+        x: Some(x + NEW_WINDOW_CASCADE),
+        y: Some(y + NEW_WINDOW_CASCADE),
+        ..from
+    };
+    let bounds = constrain_workspace_bounds(offset, fallback, displays);
+    if (f32::from(bounds.origin.x) - x).abs() < 1.0 && (f32::from(bounds.origin.y) - y).abs() < 1.0
+    {
+        let display = displays
+            .iter()
+            .find(|display| display.contains(&bounds.origin));
+        if let Some(display) = display {
+            let restart = WorkspaceWindowState {
+                x: Some(f32::from(display.origin.x) + NEW_WINDOW_CASCADE),
+                y: Some(f32::from(display.origin.y) + NEW_WINDOW_CASCADE),
+                ..from
+            };
+            return constrain_workspace_bounds(restart, fallback, displays);
+        }
+    }
+    bounds
+}
+
 fn constrain_workspace_bounds(
     saved: WorkspaceWindowState,
     current: gpui::Bounds<gpui::Pixels>,
