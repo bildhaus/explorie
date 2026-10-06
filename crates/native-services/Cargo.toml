@@ -28,7 +28,7 @@ preview-mail = ["dep:mail-parser"]
 preview-sqlite = ["dep:rusqlite"]
 
 [dependencies]
-arrow-array = { version = "59.2.0", optional = true }
+arrow-array = { version = "60.0.0", optional = true }
 arrow-cast = { version = "59.2.0", optional = true }
 arrow-ipc = { version = "59.2.0", features = ["lz4", "zstd"], optional = true }
 asset-importer = { version = "0.8.0", features = ["static-link"], optional = true }
