@@ -68,24 +68,7 @@ impl Render for DirectoryWindow {
         let (folder_count, file_count) = (stats.folders, stats.files);
         let total_file_size = stats.file_bytes;
         let hidden_count = stats.hidden;
-        let item_summary = if folder_count == 0 && file_count == 0 {
-            "Empty folder".to_string()
-        } else {
-            let mut parts = Vec::with_capacity(2);
-            if folder_count > 0 {
-                parts.push(format!(
-                    "{folder_count} folder{}",
-                    if folder_count == 1 { "" } else { "s" }
-                ));
-            }
-            if file_count > 0 {
-                parts.push(format!(
-                    "{file_count} file{}",
-                    if file_count == 1 { "" } else { "s" }
-                ));
-            }
-            parts.join(", ")
-        };
+        let item_summary = status_item_summary(folder_count, file_count, self.listing_in_flight());
         let total_size_summary = (total_file_size > 0).then(|| format_size(total_file_size));
         let mut filter_parts = Vec::with_capacity(3);
         if self.browser.filter() != EntryFilter::All {
@@ -937,5 +920,43 @@ impl Render for DirectoryWindow {
             self.render_stats.root_time += render_started.elapsed();
         }
         root
+    }
+}
+
+/// The status bar's item count. A folder still loading (or waiting on a macOS
+/// privacy prompt) has no entries yet, but it is not known to be empty.
+pub(crate) fn status_item_summary(folders: usize, files: usize, loading: bool) -> String {
+    if folders == 0 && files == 0 {
+        return if loading {
+            "Loading…"
+        } else {
+            "Empty folder"
+        }
+        .to_string();
+    }
+    let mut parts = Vec::with_capacity(2);
+    if folders > 0 {
+        parts.push(format!(
+            "{folders} folder{}",
+            if folders == 1 { "" } else { "s" }
+        ));
+    }
+    if files > 0 {
+        parts.push(format!("{files} file{}", if files == 1 { "" } else { "s" }));
+    }
+    parts.join(", ")
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::status_item_summary;
+
+    #[test]
+    fn a_folder_still_loading_is_not_called_empty() {
+        assert_eq!(status_item_summary(0, 0, true), "Loading…");
+        assert_eq!(status_item_summary(0, 0, false), "Empty folder");
+        assert_eq!(status_item_summary(1, 2, true), "1 folder, 2 files");
+        assert_eq!(status_item_summary(3, 0, false), "3 folders");
+        assert_eq!(status_item_summary(0, 1, false), "1 file");
     }
 }

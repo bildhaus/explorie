@@ -11538,6 +11538,15 @@ fn the_remote_manager_shows_how_to_ready_the_helper_and_hints_each_field(cx: &mu
             shown,
             "helper {helper}"
         );
+        if shown {
+            // The long explanation wraps; its buttons stay inside the dialog.
+            let manager = window.debug_bounds("remote-drive-manager").unwrap();
+            let install = window.debug_bounds("install-remote-helper").unwrap();
+            assert!(
+                install.right() <= manager.right(),
+                "helper {helper}: {install:?} outside {manager:?}"
+            );
+        }
     }
 
     // Each step of the profile editor hints at what it wants.

@@ -1250,7 +1250,7 @@ impl DirectoryWindow {
                 .py_2()
                 .border_b_1()
                 .border_color(rgb(0xe08a3e))
-                .child(div().flex_1().text_sm().child(error))
+                .child(div().flex_1().min_w_0().text_sm().child(error))
                 .child(
                     toolbar_button("retry-remote-setup", "Retry", self.palette.control).on_click(
                         cx.listener(|this, _, _, cx| this.refresh_remote_environment(cx)),
@@ -1305,7 +1305,7 @@ impl DirectoryWindow {
                     .py_2()
                     .border_b_1()
                     .border_color(rgb(0xe08a3e))
-                    .child(div().flex_1().text_sm().child(message))
+                    .child(div().flex_1().min_w_0().text_sm().child(message))
                     .child(
                         toolbar_button("install-remote-helper", action, self.palette.control)
                             .debug_selector(|| "install-remote-helper".to_string())
