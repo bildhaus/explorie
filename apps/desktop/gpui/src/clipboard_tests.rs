@@ -180,6 +180,60 @@ fn files_copied_elsewhere_paste_as_copies(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_copy_pasted_into_its_own_folder_becomes_a_duplicate_without_asking(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let services = NativeServices::new(ResourcePaths::test(&fixture.root));
+    let events = services.subscribe_async();
+    let ((view, clipboard), cx) = open_window(cx, services, &fixture.source);
+    clipboard.set(Some(ClipboardFiles {
+        paths: vec![fixture.file("report.txt")],
+        cut: false,
+    }));
+    view.update(cx, |view, cx| {
+        view.paste(cx);
+        let request = view.operations.latest().unwrap().request().clone();
+        assert_eq!(request.kind, FileOperationKind::Copy);
+        assert_eq!(request.conflict_policy, ConflictPolicy::Duplicate);
+    });
+    assert!(finish_operation(&view, cx, &events));
+    let duplicate = fixture.source.join(explorie_core::duplicate_name(
+        "report.txt".as_ref(),
+        1,
+        true,
+    ));
+    assert_eq!(fs::read_to_string(&duplicate).unwrap(), "report");
+    assert_eq!(
+        fs::read_to_string(fixture.file("report.txt")).unwrap(),
+        "report"
+    );
+    view.update(cx, |view, _| {
+        assert!(view.operation_ui.conflict_prompts.is_empty());
+    });
+}
+
+#[gpui::test]
+fn a_cut_pasted_into_its_own_folder_moves_nothing(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let services = NativeServices::new(ResourcePaths::test(&fixture.root));
+    let ((view, clipboard), cx) = open_window(cx, services, &fixture.source);
+    clipboard.set(Some(ClipboardFiles {
+        paths: vec![fixture.file("report.txt")],
+        cut: true,
+    }));
+    view.update(cx, |view, cx| {
+        view.paste(cx);
+        assert!(view.operations.latest().is_none(), "nothing to move");
+        assert!(view.operation_ui.conflict_prompts.is_empty());
+        assert_eq!(
+            view.status_message.as_deref(),
+            Some("The items are already in this folder")
+        );
+    });
+    assert!(fixture.file("report.txt").exists());
+    assert!(clipboard.contents().unwrap().cut, "the cut stays usable");
+}
+
+#[gpui::test]
 fn an_explorie_cut_pastes_as_a_move_and_then_clears_the_clipboard(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let services = NativeServices::new(ResourcePaths::test(&fixture.root));

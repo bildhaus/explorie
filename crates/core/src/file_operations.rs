@@ -28,6 +28,10 @@ pub enum ConflictPolicy {
     Error,
     Rename,
     Replace,
+    /// Name a target that already exists as a duplicate: Finder's "report
+    /// copy.pdf" on macOS, Explorer's "report - Copy.pdf" elsewhere. For
+    /// pasting items into the folder they came from, which never asks.
+    Duplicate,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -715,6 +719,65 @@ pub fn numbered_name(name: &std::ffi::OsStr, number: u32, preserve_extension: bo
     numbered
 }
 
+/// `name` named the platform's way for a duplicate in the same folder:
+/// "report copy.pdf", then "report copy 2.pdf" on macOS (Finder);
+/// "report - Copy.pdf", then "report - Copy (2).pdf" elsewhere (Explorer).
+/// `number` 1 is the first copy. A name that is already a copy is
+/// duplicated from its original, so a copy of "report copy.pdf" becomes
+/// "report copy 2.pdf" rather than "report copy copy.pdf". With
+/// `preserve_extension` the suffix goes before the extension.
+pub fn duplicate_name(name: &std::ffi::OsStr, number: u32, preserve_extension: bool) -> OsString {
+    let path = Path::new(name);
+    let (stem, extension) = if preserve_extension {
+        (path.file_stem().unwrap_or(name), path.extension())
+    } else {
+        (name, None)
+    };
+    let mut duplicate = OsString::from(
+        stem.to_str()
+            .and_then(original_of_duplicate)
+            .map_or(stem, std::ffi::OsStr::new),
+    );
+    duplicate.push(match (cfg!(target_os = "macos"), number) {
+        (true, 1) => " copy".to_string(),
+        (true, number) => format!(" copy {number}"),
+        (false, 1) => " - Copy".to_string(),
+        (false, number) => format!(" - Copy ({number})"),
+    });
+    if let Some(extension) = extension {
+        duplicate.push(".");
+        duplicate.push(extension);
+    }
+    duplicate
+}
+
+/// The name a duplicate was made from ("report" for "report copy 2"), or
+/// `None` when `stem` is not a duplicate's name.
+fn original_of_duplicate(stem: &str) -> Option<&str> {
+    let marker = if cfg!(target_os = "macos") {
+        " copy"
+    } else {
+        " - Copy"
+    };
+    let base = match stem.strip_suffix(marker) {
+        Some(base) => base,
+        None => {
+            let (head, tail) = stem.rsplit_once(marker)?;
+            let tail = tail.strip_prefix(' ')?;
+            let digits = if cfg!(target_os = "macos") {
+                tail
+            } else {
+                tail.strip_prefix('(')?.strip_suffix(')')?
+            };
+            if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            head
+        }
+    };
+    (!base.is_empty()).then_some(base)
+}
+
 fn resolve_target(target: &Path, policy: ConflictPolicy) -> io::Result<PathBuf> {
     if !path_exists_no_follow(target)? {
         return Ok(target.to_path_buf());
@@ -731,6 +794,21 @@ fn resolve_target(target: &Path, policy: ConflictPolicy) -> io::Result<PathBuf> 
             })?;
             for number in FIRST_CONFLICT_NUMBER.. {
                 let candidate = target.with_file_name(numbered_name(name, number, true));
+                if !path_exists_no_follow(&candidate)? {
+                    return Ok(candidate);
+                }
+            }
+            unreachable!()
+        }
+        ConflictPolicy::Duplicate => {
+            let name = target.file_name().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid target name")
+            })?;
+            // Folders keep their whole name: "my.folder copy".
+            let preserve_extension = !fs::symlink_metadata(target)?.is_dir();
+            for number in 1.. {
+                let candidate =
+                    target.with_file_name(duplicate_name(name, number, preserve_extension));
                 if !path_exists_no_follow(&candidate)? {
                     return Ok(candidate);
                 }
@@ -1677,6 +1755,14 @@ fn path_starts_with(path: &Path, prefix: &Path) -> bool {
     }
 }
 
+/// Whether `left` and `right` name the same directory once links are
+/// resolved (case-insensitively on Windows). Paths that cannot be resolved
+/// are compared as given.
+pub fn same_directory(left: &Path, right: &Path) -> bool {
+    let resolve = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    paths_equal(&resolve(left), &resolve(right))
+}
+
 fn paths_equal(left: &Path, right: &Path) -> bool {
     let mut left = left.components();
     let mut right = right.components();
@@ -1914,6 +2000,72 @@ mod tests {
         ));
         assert_eq!(result.targets, vec![expected.clone()]);
         assert_eq!(fs::read(expected).unwrap(), b"new");
+    }
+
+    #[test]
+    fn duplicates_are_named_the_platform_file_managers_way() {
+        let name = |name: &str, number: u32, preserve_extension: bool| {
+            duplicate_name(std::ffi::OsStr::new(name), number, preserve_extension)
+        };
+        if cfg!(target_os = "macos") {
+            assert_eq!(name("report.pdf", 1, true), "report copy.pdf");
+            assert_eq!(name("report.pdf", 2, true), "report copy 2.pdf");
+            assert_eq!(name("my.folder", 1, false), "my.folder copy");
+            assert_eq!(name("archive.tar.gz", 1, true), "archive.tar copy.gz");
+            // Duplicating a duplicate continues its sequence.
+            assert_eq!(name("report copy.pdf", 2, true), "report copy 2.pdf");
+            assert_eq!(name("report copy 2.pdf", 3, true), "report copy 3.pdf");
+            assert_eq!(name("copy.txt", 1, true), "copy copy.txt");
+            assert_eq!(
+                name("photo copy two.jpg", 1, true),
+                "photo copy two copy.jpg"
+            );
+        } else {
+            assert_eq!(name("report.pdf", 1, true), "report - Copy.pdf");
+            assert_eq!(name("report.pdf", 2, true), "report - Copy (2).pdf");
+            assert_eq!(name("my.folder", 1, false), "my.folder - Copy");
+            assert_eq!(name("report - Copy.pdf", 2, true), "report - Copy (2).pdf");
+            assert_eq!(
+                name("report - Copy (2).pdf", 3, true),
+                "report - Copy (3).pdf"
+            );
+        }
+    }
+
+    #[test]
+    fn copying_into_the_same_folder_makes_numbered_duplicates() {
+        let temp = tempdir().unwrap();
+        let folder = temp.path();
+        let note = folder.join("note.txt");
+        let subfolder = folder.join("folder");
+        fs::write(&note, b"note").unwrap();
+        fs::create_dir(&subfolder).unwrap();
+        fs::write(subfolder.join("inside.txt"), b"inside").unwrap();
+
+        let duplicate = |source: &Path| {
+            perform_file_operation(
+                request(
+                    FileOperationKind::Copy,
+                    source,
+                    folder,
+                    ConflictPolicy::Duplicate,
+                ),
+                &AtomicBool::new(false),
+                |_| {},
+            )
+            .unwrap()
+            .targets
+        };
+        let first = folder.join(duplicate_name("note.txt".as_ref(), 1, true));
+        let second = folder.join(duplicate_name("note.txt".as_ref(), 2, true));
+        let folder_copy = folder.join(duplicate_name("folder".as_ref(), 1, false));
+        assert_eq!(duplicate(&note), vec![first.clone()]);
+        assert_eq!(duplicate(&note), vec![second.clone()]);
+        assert_eq!(duplicate(&subfolder), vec![folder_copy.clone()]);
+        assert_eq!(fs::read(&first).unwrap(), b"note");
+        assert_eq!(fs::read(&second).unwrap(), b"note");
+        assert_eq!(fs::read(folder_copy.join("inside.txt")).unwrap(), b"inside");
+        assert_eq!(fs::read(&note).unwrap(), b"note", "the original stays");
     }
 
     /// How `rename_noreplace` behaves on the current test thread.
