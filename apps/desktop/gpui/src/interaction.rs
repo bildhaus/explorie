@@ -397,6 +397,9 @@ fn volume_of(path: &Path, follow: bool) -> Option<String> {
     let resolved = if follow {
         std::fs::canonicalize(path).ok()?
     } else {
+        // The item itself must exist (a link is judged where it lives, so
+        // its parent is resolved); a missing source has no volume.
+        std::fs::symlink_metadata(path).ok()?;
         std::fs::canonicalize(path.parent()?).ok()?
     };
     match resolved.components().next()? {
