@@ -7950,13 +7950,18 @@ fn a_long_watcher_error_does_not_cover_the_status_item_summary(cx: &mut TestAppC
     );
 
     // A folder that could not be loaded is not known to be empty; the listing
-    // already says it could not be loaded.
+    // already says it could not be loaded. Entries kept from its last listing,
+    // as when a remote drive disconnects, must not be counted as hidden.
     view.update(window, |view, cx| {
+        let mut hidden = absolute_entry(directory.join(".hidden"));
+        hidden.hidden = true;
+        view.browser.replace_entries(vec![hidden]);
         view.listing.state = ListingState::Failed("No such file or directory".to_string());
         cx.notify();
     });
     window.run_until_parked();
     assert!(window.debug_bounds("status-item-summary").is_none());
+    assert!(window.debug_bounds("status-filter-summary").is_none());
     let watcher = window.debug_bounds("status-watcher-summary").unwrap();
     assert!(watcher.left() >= status.left() && watcher.right() <= status.right());
     remove_fixture(&directory);
