@@ -108,6 +108,7 @@ pub(crate) enum UpdateAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PendingDraftAction {
     CloseControlSurface,
+    CloseControlEditor,
     OpenControlSurface(ControlSurface),
     ToggleToolbarMenu(ToolbarMenu),
     OpenSettings,

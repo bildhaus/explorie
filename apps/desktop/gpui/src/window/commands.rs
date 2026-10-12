@@ -430,11 +430,64 @@ impl DirectoryWindow {
         cx.notify();
     }
 
+    /// Whether an open editor holds changes that closing it would lose. One
+    /// left as it opened, including the field being typed in, holds none.
     pub(crate) fn has_control_draft(&self) -> bool {
-        self.workspace_ui.editing.is_some()
-            || self.smart_folder_editor.is_some()
-            || self.remote.editor.is_some()
-            || self.batch_rename.is_some()
+        let query = self.overlay.query.trim();
+        self.workspace_ui.editing.as_deref().is_some_and(|id| {
+            self.workspaces
+                .get(id)
+                .is_some_and(|workspace| query != workspace.name.trim())
+        }) || self.smart_folder_editor.as_ref().is_some_and(|draft| {
+            self.smart_folder_baseline
+                .as_ref()
+                .is_none_or(|baseline| !draft.same_content(baseline))
+        }) || self.remote.editor.as_ref().is_some_and(|editor| {
+            editor.draft != editor.original || query != Self::remote_editor_value(editor)
+        }) || self
+            .batch_rename
+            .as_ref()
+            .is_some_and(BatchRenameEditor::has_changes)
+    }
+
+    /// Escape closes an open workspace rename or remote-drive profile editor
+    /// (or a pending delete) before the surface itself, asking first only
+    /// when the editor holds changes. Returns whether there was one to close.
+    pub(crate) fn dismiss_control_surface_layer(&mut self, cx: &mut Context<Self>) -> bool {
+        let layered = match self.overlay.surface {
+            ControlSurface::Workspaces => {
+                self.workspace_ui.editing.is_some()
+                    || self.workspace_ui.delete_confirmation.is_some()
+            }
+            ControlSurface::RemoteDrives => {
+                self.remote.editor.is_some()
+                    || self.remote.delete_confirmation.is_some()
+                    || self.remote.blocked_disconnect.is_some()
+            }
+            _ => false,
+        };
+        if !layered {
+            return false;
+        }
+        if self.has_control_draft() {
+            self.request_settings_confirmation(
+                SettingsConfirmation::DiscardDraft(PendingDraftAction::CloseControlEditor),
+                cx,
+            );
+        } else {
+            self.close_control_editor(cx);
+        }
+        true
+    }
+
+    pub(crate) fn close_control_editor(&mut self, cx: &mut Context<Self>) {
+        self.workspace_ui.editing = None;
+        self.workspace_ui.delete_confirmation = None;
+        self.remote.editor = None;
+        self.remote.delete_confirmation = None;
+        self.remote.blocked_disconnect = None;
+        self.overlay.query.clear();
+        cx.notify();
     }
 
     pub(crate) fn selection_marquee_overlay_rect(&self, layout: MarqueeLayout) -> Option<GridRect> {
@@ -475,29 +528,11 @@ impl DirectoryWindow {
         cx: &mut Context<Self>,
     ) {
         match event.keystroke.key.as_str() {
-            "escape"
-                if self.overlay.surface == ControlSurface::Workspaces
-                    && (self.workspace_ui.editing.is_some()
-                        || self.workspace_ui.delete_confirmation.is_some()) =>
-            {
-                self.workspace_ui.editing = None;
-                self.workspace_ui.delete_confirmation = None;
-                self.overlay.query.clear();
-                cx.notify();
+            "escape" => {
+                if !self.dismiss_control_surface_layer(cx) {
+                    self.close_control_surface(cx);
+                }
             }
-            "escape"
-                if self.overlay.surface == ControlSurface::RemoteDrives
-                    && (self.remote.editor.is_some()
-                        || self.remote.delete_confirmation.is_some()
-                        || self.remote.blocked_disconnect.is_some()) =>
-            {
-                self.remote.editor = None;
-                self.remote.delete_confirmation = None;
-                self.remote.blocked_disconnect = None;
-                self.overlay.query.clear();
-                cx.notify();
-            }
-            "escape" => self.close_control_surface(cx),
             "backspace" if self.overlay.surface == ControlSurface::SmartFolders => {
                 let mut value = self.overlay.query.clone();
                 value.pop();

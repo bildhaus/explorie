@@ -44,6 +44,7 @@ impl DirectoryWindow {
             return;
         }
         self.overlay.query = draft.value(draft.field).to_string();
+        self.smart_folder_baseline = Some(draft.clone());
         self.smart_folder_editor = Some(draft);
         cx.notify();
     }

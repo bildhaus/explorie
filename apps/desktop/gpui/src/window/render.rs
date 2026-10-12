@@ -68,7 +68,12 @@ impl Render for DirectoryWindow {
         let (folder_count, file_count) = (stats.folders, stats.files);
         let total_file_size = stats.file_bytes;
         let hidden_count = stats.hidden;
-        let item_summary = status_item_summary(folder_count, file_count, self.listing_in_flight());
+        // A folder that failed to load is not known to be empty, and the
+        // listing already says it could not be loaded.
+        let listing_failed = self.browser.view_mode() != ViewMode::Column
+            && matches!(self.listing.state, ListingState::Failed(_));
+        let item_summary = (!listing_failed)
+            .then(|| status_item_summary(folder_count, file_count, self.listing_in_flight()));
         let total_size_summary = (total_file_size > 0).then(|| format_size(total_file_size));
         let mut filter_parts = Vec::with_capacity(3);
         if self.browser.filter() != EntryFilter::All {
@@ -308,24 +313,30 @@ impl Render for DirectoryWindow {
                         .flex()
                         .items_center()
                         .gap_2()
+                        // No `min_w_0`: the cluster keeps room for the item
+                        // count and operation button, so a long watcher error
+                        // on the right truncates instead of covering them.
                         .flex_1()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .id("status-item-summary")
-                                .debug_selector(|| "status-item-summary".to_string())
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .flex_shrink_0()
-                                .text_color(self.palette.text)
-                                .child(item_summary)
-                                .when_some(total_size_summary, |summary, size| {
-                                    summary
-                                        .child(div().text_color(self.palette.border).child("/"))
-                                        .child(div().text_color(self.palette.tertiary).child(size))
-                                }),
-                        )
+                        .when_some(item_summary, |cluster, item_summary| {
+                            cluster.child(
+                                div()
+                                    .id("status-item-summary")
+                                    .debug_selector(|| "status-item-summary".to_string())
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .flex_shrink_0()
+                                    .text_color(self.palette.text)
+                                    .child(item_summary)
+                                    .when_some(total_size_summary, |summary, size| {
+                                        summary
+                                            .child(div().text_color(self.palette.border).child("/"))
+                                            .child(
+                                                div().text_color(self.palette.tertiary).child(size),
+                                            )
+                                    }),
+                            )
+                        })
                         .when_some(filter_summary, |cluster, summary| {
                             cluster.child(
                                 div()
@@ -413,7 +424,10 @@ impl Render for DirectoryWindow {
                                 div()
                                     .id("status-watcher-summary")
                                     .debug_selector(|| "status-watcher-summary".to_string())
-                                    .flex_shrink_0()
+                                    .flex_shrink(1.)
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .truncate()
                                     .text_color(color)
                                     .child(label),
                             )
@@ -534,7 +548,9 @@ impl Render for DirectoryWindow {
                 } else if this.overlay.toolbar_menu != ToolbarMenu::Closed {
                     this.close_toolbar_menu(cx);
                 } else if this.overlay.surface != ControlSurface::Closed {
-                    this.close_control_surface(cx);
+                    if !this.dismiss_control_surface_layer(cx) {
+                        this.close_control_surface(cx);
+                    }
                 } else if this.plugin_ui.details_open {
                     this.plugin_ui.details_open = false;
                     cx.notify();

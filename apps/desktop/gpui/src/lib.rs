@@ -1026,6 +1026,8 @@ pub struct DirectoryWindow {
     /// Workspace manager editing state and loads in flight.
     workspace_ui: WorkspaceUi,
     smart_folder_editor: Option<SmartFolderDraft>,
+    /// The smart-folder draft as its editor opened, to tell whether it changed.
+    smart_folder_baseline: Option<SmartFolderDraft>,
     /// Panel sizes, listing geometry and window bounds.
     layout: WindowLayout,
     /// Resizes, the selection marquee and file drags in progress.

@@ -198,6 +198,9 @@ impl RemoteEditorField {
 #[derive(Clone, Debug)]
 pub(crate) struct RemoteProfileEditor {
     pub(crate) draft: RemoteDriveProfile,
+    /// The profile as the editor opened it, so closing an unchanged editor
+    /// does not ask to discard anything.
+    pub(crate) original: RemoteDriveProfile,
     pub(crate) field: RemoteEditorField,
 }
 

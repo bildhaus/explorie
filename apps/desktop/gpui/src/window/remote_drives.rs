@@ -559,6 +559,7 @@ impl DirectoryWindow {
         });
         self.overlay.query.clone_from(&draft.name);
         self.remote.editor = Some(RemoteProfileEditor {
+            original: draft.clone(),
             draft,
             field: RemoteEditorField::Name,
         });

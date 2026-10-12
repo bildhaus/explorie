@@ -7872,6 +7872,56 @@ fn status_bar_restores_listing_context_operations_and_responsive_detail(cx: &mut
     remove_fixture(&directory);
 }
 
+/// Found on a real machine: in a folder whose watcher failed to register, the
+/// long watcher error and "Empty folder" were drawn on top of each other at
+/// the left of the status bar.
+#[gpui::test]
+fn a_long_watcher_error_does_not_cover_the_status_item_summary(cx: &mut TestAppContext) {
+    let directory = fixture_dir();
+    let services = NativeServices::new(ResourcePaths::test(&directory));
+    let (view, window) =
+        cx.add_window_view(|_, cx| DirectoryWindow::new(directory.clone(), services, cx));
+    window.simulate_resize(gpui::size(px(800.0), px(600.0)));
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        view.browser.replace_entries(Vec::<FileEntry>::new());
+        view.listing.state = ListingState::Ready;
+        view.watcher.status = WatchStatus::Unavailable(
+            "Failed to register filesystem watcher: No path was found. about \
+             [\"/Volumes/Test WebDAV\"]"
+                .to_string(),
+        );
+        cx.notify();
+    });
+    window.run_until_parked();
+
+    let status = window.debug_bounds("watcher-status").unwrap();
+    let summary = window.debug_bounds("status-item-summary").unwrap();
+    let watcher = window.debug_bounds("status-watcher-summary").unwrap();
+    assert!(
+        summary.right() <= watcher.left(),
+        "the watcher error covers the item summary: summary={summary:?}, watcher={watcher:?}"
+    );
+    assert!(f32::from(summary.size.width) > 0.0);
+    assert!(f32::from(watcher.size.width) > 0.0);
+    assert!(
+        watcher.left() >= status.left() && watcher.right() <= status.right(),
+        "the watcher error escapes the status bar: watcher={watcher:?}, status={status:?}"
+    );
+
+    // A folder that could not be loaded is not known to be empty; the listing
+    // already says it could not be loaded.
+    view.update(window, |view, cx| {
+        view.listing.state = ListingState::Failed("No such file or directory".to_string());
+        cx.notify();
+    });
+    window.run_until_parked();
+    assert!(window.debug_bounds("status-item-summary").is_none());
+    let watcher = window.debug_bounds("status-watcher-summary").unwrap();
+    assert!(watcher.left() >= status.left() && watcher.right() <= status.right());
+    remove_fixture(&directory);
+}
+
 #[gpui::test]
 fn operation_history_is_a_bounded_floating_panel_with_minimize_and_close(cx: &mut TestAppContext) {
     let directory = fixture_dir();
@@ -10160,11 +10210,12 @@ fn bound_actions_drive_tabs_favorites_and_multi_selection(cx: &mut TestAppContex
             assert!(view.browser.smart_folders().is_empty());
         })
         .unwrap();
+    // The draft was not changed, so Escape closes it without asking.
     cx.dispatch_keystroke(*window, Keystroke::parse("escape").unwrap());
     window
-        .update(cx, |view, window, cx| {
-            assert!(view.settings_ui.confirmation.is_some());
-            view.confirm_settings_confirmation(window, cx);
+        .update(cx, |view, _, _| {
+            assert!(view.settings_ui.confirmation.is_none());
+            assert_eq!(view.overlay.surface, ControlSurface::Closed);
         })
         .unwrap();
 
@@ -11505,6 +11556,131 @@ fn the_remote_editor_field_takes_focus_back_when_clicked(cx: &mut TestAppContext
     }
     window.run_until_parked();
     view.read_with(window, |view, _| assert_eq!(view.overlay.query, "Office"));
+    remove_fixture(&root);
+}
+
+/// Found on a real machine: pressing Escape in a profile editor opened with
+/// Edit, with nothing changed, asked to discard unsaved changes.
+#[gpui::test]
+fn escape_asks_to_discard_a_remote_profile_only_after_a_change(cx: &mut TestAppContext) {
+    let root = fixture_dir();
+    let backend = Arc::new(FakeGpuiRemoteBackend::default());
+    let services = NativeServices::with_remote_backend(
+        ResourcePaths::test(&root),
+        Arc::clone(&backend) as Arc<dyn RemoteDriveBackend>,
+    );
+    let (view, window) =
+        cx.add_window_view(|_, cx| DirectoryWindow::restore(root.clone(), false, services, cx));
+    window.simulate_resize(gpui::size(px(1024.0), px(768.0)));
+    let profile = remote_profile("office");
+    view.update(window, |view, cx| {
+        view.install_shortcut_bindings(cx);
+        view.remote.environment = Some(remote_test_environment("enabled"));
+        view.remote.available = vec!["cloud".to_string()];
+        view.settings.remote_profiles = vec![profile.clone()];
+        view.open_remote_drive_manager(cx);
+        view.remote.environment = Some(remote_test_environment("enabled"));
+    });
+    window.run_until_parked();
+    let press = |window: &mut gpui::VisualTestContext, key: &str| {
+        window.update(|window, cx| {
+            window.dispatch_keystroke(Keystroke::parse(key).unwrap().with_simulated_ime(), cx);
+        });
+        window.run_until_parked();
+    };
+    let open_editor = |view: &Entity<DirectoryWindow>,
+                       window: &mut gpui::VisualTestContext,
+                       profile: Option<RemoteDriveProfile>| {
+        view.update(window, |view, cx| {
+            view.open_remote_profile_editor(profile, cx)
+        });
+        window.run_until_parked();
+    };
+    let assert_closed_without_asking =
+        |view: &Entity<DirectoryWindow>, window: &mut gpui::VisualTestContext, case: &str| {
+            view.read_with(window, |view, _| {
+                assert!(view.settings_ui.confirmation.is_none(), "{case}: asked");
+                assert!(view.remote.editor.is_none(), "{case}: editor still open");
+                assert_eq!(
+                    view.overlay.surface,
+                    ControlSurface::RemoteDrives,
+                    "{case}: Escape closes the editor, not the manager"
+                );
+            });
+        };
+
+    open_editor(&view, window, Some(profile.clone()));
+    press(window, "escape");
+    assert_closed_without_asking(&view, window, "unchanged edit");
+
+    // Stepping to the next field without changing anything is no change.
+    open_editor(&view, window, Some(profile.clone()));
+    view.update(window, |view, cx| view.commit_remote_editor_field(cx));
+    window.run_until_parked();
+    press(window, "escape");
+    assert_closed_without_asking(&view, window, "unchanged after Next");
+
+    open_editor(&view, window, None);
+    press(window, "escape");
+    assert_closed_without_asking(&view, window, "untouched new profile");
+
+    // A typed change asks first; discarding closes just the editor.
+    open_editor(&view, window, Some(profile.clone()));
+    press(window, "s");
+    press(window, "escape");
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert!(matches!(
+                view.settings_ui.confirmation,
+                Some(SettingsConfirmation::DiscardDraft(_))
+            ));
+            assert!(view.remote.editor.is_some());
+            view.confirm_settings_confirmation(window, cx);
+        });
+    });
+    window.run_until_parked();
+    assert_closed_without_asking(&view, window, "discarded change");
+    view.read_with(window, |view, _| {
+        assert_eq!(view.settings.remote_profiles, vec![profile.clone()]);
+    });
+
+    // So does a committed change, once the field shows its saved value again.
+    open_editor(&view, window, Some(profile.clone()));
+    view.update(window, |view, cx| {
+        view.overlay.query = "Renamed".to_string();
+        view.commit_remote_editor_field(cx);
+    });
+    window.run_until_parked();
+    press(window, "escape");
+    view.read_with(window, |view, _| {
+        assert!(view.settings_ui.confirmation.is_some(), "committed change");
+    });
+    remove_fixture(&root);
+}
+
+#[gpui::test]
+fn smart_folder_and_batch_rename_drafts_count_only_once_changed(cx: &mut TestAppContext) {
+    let root = fixture_dir();
+    let services = NativeServices::new(ResourcePaths::test(&root));
+    let (view, window) =
+        cx.add_window_view(|_, cx| DirectoryWindow::new(root.clone(), services, cx));
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        view.open_smart_folder_editor(None, cx);
+        assert!(view.smart_folder_editor.is_some());
+        assert!(!view.has_control_draft(), "untouched smart folder");
+        view.update_smart_folder_query("Reports".to_string(), cx);
+        assert!(view.has_control_draft(), "renamed smart folder");
+        view.close_control_surface_unchecked(cx);
+
+        view.batch_rename = Some(BatchRenameEditor::new(&[]));
+        assert!(!view.has_control_draft(), "untouched batch rename");
+        view.batch_rename
+            .as_mut()
+            .unwrap()
+            .set_active_value("draft".to_string());
+        assert!(view.has_control_draft(), "edited batch rename");
+    });
     remove_fixture(&root);
 }
 
