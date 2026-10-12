@@ -1,5 +1,6 @@
 //! `DirectoryWindow` behavior for listing view.
 
+use super::remote_drives::DisconnectedRemote;
 use super::selection::is_secondary_click;
 use crate::*;
 
@@ -160,7 +161,17 @@ impl DirectoryWindow {
                 .child("Loading files…")
                 .into_any_element(),
             ListingState::Failed(error) => {
-                let error = error.clone();
+                // A folder inside a remote drive that is not mounted fails
+                // with a raw "no such file" error; say the drive is
+                // disconnected and offer to connect it instead.
+                let remote = self.disconnected_remote_for(self.browser.path());
+                let title = remote.as_ref().map_or_else(
+                    || "Couldn’t load this folder".to_string(),
+                    |remote| format!("“{}” is disconnected", remote.name),
+                );
+                let error = remote
+                    .as_ref()
+                    .map_or_else(|| error.clone(), |remote| remote.detail.clone());
                 let path = self.browser.path().display().to_string();
                 let picker_active = self.navigation_ui.folder_picker_active;
                 let picker_error = self.navigation_ui.folder_picker_error.clone();
@@ -205,7 +216,7 @@ impl DirectoryWindow {
                         div()
                             .text_base()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Couldn’t load this folder"),
+                            .child(title),
                     )
                     .child(
                         div()
@@ -230,15 +241,38 @@ impl DirectoryWindow {
                             .justify_center()
                             .gap_2()
                             .mt_2()
-                            .child(
-                                div().text_color(palette.window).child(
+                            .child(div().text_color(palette.window).child(
+                                if let Some(DisconnectedRemote { id, connecting, .. }) = remote {
+                                    toolbar_button(
+                                        "connect-remote-listing",
+                                        if connecting {
+                                            "Connecting…"
+                                        } else {
+                                            "Connect"
+                                        },
+                                        if connecting {
+                                            with_alpha(palette.accent, 0.65)
+                                        } else {
+                                            palette.accent
+                                        },
+                                    )
+                                    .debug_selector(|| "connect-remote-listing".to_string())
+                                    .when(
+                                        !connecting,
+                                        |button| {
+                                            button.on_click(cx.listener(move |this, _, _, cx| {
+                                                this.connect_remote_profile(id.clone(), cx)
+                                            }))
+                                        },
+                                    )
+                                } else {
                                     toolbar_button("retry-listing", "Try again", palette.accent)
                                         .debug_selector(|| "retry-listing".to_string())
                                         .on_click(
                                             cx.listener(|this, _, _, cx| this.start_listing(cx)),
-                                        ),
-                                ),
-                            )
+                                        )
+                                },
+                            ))
                             .child(
                                 toolbar_button(
                                     "choose-another-folder",

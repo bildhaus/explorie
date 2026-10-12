@@ -56,6 +56,46 @@ fn containing_location_uses_the_most_specific_ancestor() {
 }
 
 #[test]
+fn startup_disk_does_not_claim_unlisted_macos_volumes() {
+    let locations = vec![
+        ("Home".to_string(), PathBuf::from("/Users/me"), "home"),
+        ("Macintosh HD".to_string(), PathBuf::from("/"), "drive"),
+        (
+            "Backup".to_string(),
+            PathBuf::from("/Volumes/Backup"),
+            "drive",
+        ),
+    ];
+
+    assert_eq!(
+        most_specific_location_index(Path::new("/Users/me/Documents"), &locations),
+        Some(0)
+    );
+    assert_eq!(
+        most_specific_location_index(Path::new("/Library"), &locations),
+        Some(1)
+    );
+    assert_eq!(
+        most_specific_location_index(Path::new("/Volumes"), &locations),
+        Some(1)
+    );
+    assert_eq!(
+        most_specific_location_index(Path::new("/Volumes/Backup/2026"), &locations),
+        Some(2)
+    );
+    // A remote drive that is not mounted, or a volume the list has not
+    // caught up with, is not on the startup disk.
+    assert_eq!(
+        most_specific_location_index(Path::new("/Volumes/Test WebDAV/docs"), &locations),
+        if cfg!(target_os = "macos") {
+            None
+        } else {
+            Some(1)
+        }
+    );
+}
+
+#[test]
 fn stepped_slider_fraction_spans_the_track_and_clamps_invalid_indexes() {
     assert_eq!(stepped_slider_fraction(0, 5), 0.0);
     assert_eq!(stepped_slider_fraction(2, 5), 0.5);
@@ -11370,6 +11410,154 @@ fn native_remote_manager_connects_blocks_pending_disconnect_and_removes_cleanly(
         assert!(view.settings.remote_profiles.is_empty());
         view.settings_store.as_ref().unwrap().flush();
     });
+    remove_fixture(&root);
+}
+
+#[gpui::test]
+fn folder_in_a_disconnected_remote_drive_offers_to_connect_and_reloads(cx: &mut TestAppContext) {
+    let root = fixture_dir();
+    let resources = ResourcePaths::test(&root);
+    let backend = Arc::new(FakeGpuiRemoteBackend::default());
+    let services = NativeServices::with_remote_backend(
+        resources,
+        Arc::clone(&backend) as Arc<dyn RemoteDriveBackend>,
+    );
+    let id = Uuid::new_v4().to_string();
+    let profile = remote_profile(&id);
+    let mount = remote_mount_path(&profile).unwrap();
+    let (view, window) =
+        cx.add_window_view(|_, cx| DirectoryWindow::new(root.clone(), services, cx));
+    window.simulate_resize(gpui::size(px(900.0), px(650.0)));
+
+    // A restored window opens a folder inside the drive after quitting
+    // disconnected it.
+    view.update(window, |view, cx| {
+        view.settings.behavior.remote_drives_enabled = true;
+        view.settings.remote_profiles = vec![profile];
+        view.navigate_to(mount.join("reports"), cx);
+    });
+    let poll_deadline = Instant::now() + POLL_TIMEOUT;
+    while Instant::now() < poll_deadline {
+        window.run_until_parked();
+        if view.read_with(window, |view, _| {
+            matches!(view.listing.state, ListingState::Failed(_))
+        }) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    window.run_until_parked();
+    assert!(window.debug_bounds("listing-error").is_some());
+    assert!(window.debug_bounds("retry-listing").is_none());
+    assert!(window.debug_bounds("choose-another-folder").is_some());
+    let generation = view.read_with(window, |view, _| {
+        let remote = view.disconnected_remote_for(view.browser.path()).unwrap();
+        assert_eq!(remote.id, id);
+        assert_eq!(remote.name, "Projects");
+        assert!(!remote.connecting);
+        view.listing.generation
+    });
+
+    let connect = window
+        .debug_bounds("connect-remote-listing")
+        .expect("connect offer")
+        .center();
+    window.simulate_click(connect, gpui::Modifiers::default());
+    let poll_deadline = Instant::now() + POLL_TIMEOUT;
+    while Instant::now() < poll_deadline {
+        window.run_until_parked();
+        if view.read_with(window, |view, _| {
+            view.remote
+                .statuses
+                .get(&id)
+                .is_some_and(|status| status.state == RemoteDriveState::Connected)
+        }) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    window.run_until_parked();
+    view.read_with(window, |view, _| {
+        assert_eq!(backend.state.lock().unwrap().started, 1);
+        assert_eq!(
+            view.remote.statuses.get(&id).unwrap().state,
+            RemoteDriveState::Connected
+        );
+        // Connecting loads the folder again.
+        assert!(view.listing.generation > generation);
+        assert!(view.disconnected_remote_for(&mount).is_none());
+    });
+    remove_fixture(&root);
+}
+
+#[gpui::test]
+fn connected_remote_drives_are_sidebar_locations_and_claim_their_folders(cx: &mut TestAppContext) {
+    let root = fixture_dir();
+    let resources = ResourcePaths::test(&root);
+    let backend = Arc::new(FakeGpuiRemoteBackend::default());
+    let services = NativeServices::with_remote_backend(
+        resources,
+        Arc::clone(&backend) as Arc<dyn RemoteDriveBackend>,
+    );
+    let id = Uuid::new_v4().to_string();
+    let profile = remote_profile(&id);
+    let mount = remote_mount_path(&profile).unwrap();
+    let startup_disk = if cfg!(windows) { "C:\\" } else { "/" };
+    let (view, window) =
+        cx.add_window_view(|_, cx| DirectoryWindow::new(root.clone(), services, cx));
+    window.simulate_resize(gpui::size(px(1_024.0), px(768.0)));
+    view.update(window, |view, cx| {
+        view.settings.behavior.remote_drives_enabled = true;
+        view.settings.remote_profiles = vec![profile];
+        view.system.locations = Some(SystemLocations {
+            desktop: None,
+            documents: None,
+            downloads: None,
+            music: None,
+            pictures: None,
+            videos: None,
+            home: Some(root.display().to_string()),
+            drives: vec![startup_disk.to_string()],
+            volumes: vec![explorie_native_services::VolumeLocation {
+                path: startup_disk.to_string(),
+                name: "Macintosh HD".to_string(),
+            }],
+        });
+        view.connect_remote_profile(id.clone(), cx);
+    });
+    let poll_deadline = Instant::now() + POLL_TIMEOUT;
+    while Instant::now() < poll_deadline {
+        window.run_until_parked();
+        if view.read_with(window, |view, _| {
+            view.remote
+                .statuses
+                .get(&id)
+                .is_some_and(|status| status.state == RemoteDriveState::Connected)
+        }) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let locations = view.read_with(window, |view, _| view.sidebar_locations().unwrap());
+    let remote_index = locations
+        .iter()
+        .position(|(_, path, _)| path == &mount)
+        .expect("connected remote drive in Locations");
+    assert_eq!(locations[remote_index].0, "Projects");
+    assert_eq!(locations[remote_index].2, "cloud");
+    assert_eq!(
+        most_specific_location_index(&mount.join("reports"), &locations),
+        Some(remote_index)
+    );
+
+    window.run_until_parked();
+    let row = window
+        .debug_bounds(format!("location-{remote_index}").leak())
+        .expect("remote drive row")
+        .center();
+    window.simulate_click(row, gpui::Modifiers::default());
+    view.read_with(window, |view, _| assert_eq!(view.browser.path(), mount));
     remove_fixture(&root);
 }
 

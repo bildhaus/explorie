@@ -67,7 +67,7 @@ pub use remote_drives::{
     DisconnectResult, HELPER_APPROVAL_MESSAGE, RemoteControlRequest, RemoteDriveBackend,
     RemoteDriveEnvironment, RemoteDriveExitBlocker, RemoteDriveProcess, RemoteDriveProfile,
     RemoteDriveService, RemoteDriveState, RemoteDriveStatus, RemoteMountRequest,
-    RemoteProcessStatus, validate_remote_drive_profile,
+    RemoteProcessStatus, remote_mount_path, validate_remote_drive_profile,
 };
 pub use rich_preview::{RichBlock, RichBlockKind, RichPreview, RichSpan, RichSpanStyle};
 pub use search::{

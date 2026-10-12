@@ -28,6 +28,16 @@ pub(crate) struct RemoteDrivesUi {
     pub(crate) retries: BTreeMap<String, RemoteRetryState>,
 }
 
+/// A remote drive that a folder which failed to load lies inside, while the
+/// drive is not connected.
+pub(crate) struct DisconnectedRemote {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) connecting: bool,
+    /// Why the folder is unavailable, or why connecting last failed.
+    pub(crate) detail: String,
+}
+
 impl DirectoryWindow {
     pub(crate) fn open_remote_drive_manager(&mut self, cx: &mut Context<Self>) {
         self.remote.editor = None;
@@ -122,6 +132,11 @@ impl DirectoryWindow {
                 && status.state == RemoteDriveState::Error
                 && status.error.as_ref().is_some_and(|error| error.retryable)
                 && !self.remote.retries.contains_key(&id);
+            if !was_connected {
+                // Another window may have connected the drive this one
+                // failed to load.
+                self.reload_listing_inside_connected_remote(&status, cx);
+            }
             self.remote.statuses.insert(id.clone(), status);
             if degraded
                 && let Some(profile) = self
@@ -261,6 +276,66 @@ impl DirectoryWindow {
         self.start_remote_connect_sequence(profile, auto_connect, cx);
     }
 
+    /// The offer to connect the remote drive whose mount location holds
+    /// `path` while that drive is not connected. A folder there fails to load
+    /// only because nothing is mounted, as when a restored window opens a
+    /// drive that quitting disconnected.
+    pub(crate) fn disconnected_remote_for(&self, path: &Path) -> Option<DisconnectedRemote> {
+        if !self.settings.behavior.remote_drives_enabled {
+            return None;
+        }
+        self.settings.remote_profiles.iter().find_map(|profile| {
+            let status = self.remote.statuses.get(&profile.id);
+            if status.is_some_and(|status| status.state == RemoteDriveState::Connected) {
+                return None;
+            }
+            let root = remote_mount_path(profile).ok()?;
+            if !path_is_within(path, &root) {
+                return None;
+            }
+            let connecting = status.is_some_and(|status| {
+                matches!(
+                    status.state,
+                    RemoteDriveState::Connecting | RemoteDriveState::Disconnecting
+                )
+            });
+            let detail = status
+                .and_then(|status| status.error.as_ref())
+                .filter(|_| !connecting)
+                .map_or_else(
+                    || "Connect the remote drive to browse this folder.".to_string(),
+                    |error| format!("Couldn’t connect: {}", error.message),
+                );
+            Some(DisconnectedRemote {
+                id: profile.id.clone(),
+                name: profile.name.clone(),
+                connecting,
+                detail,
+            })
+        })
+    }
+
+    /// Load the current folder again when it failed because the drive that
+    /// `status` reports connected was not mounted yet.
+    pub(crate) fn reload_listing_inside_connected_remote(
+        &mut self,
+        status: &RemoteDriveStatus,
+        cx: &mut Context<Self>,
+    ) {
+        if status.state != RemoteDriveState::Connected
+            || !matches!(self.listing.state, ListingState::Failed(_))
+        {
+            return;
+        }
+        if status
+            .mount_path
+            .as_deref()
+            .is_some_and(|root| path_is_within(self.browser.path(), root))
+        {
+            self.start_listing(cx);
+        }
+    }
+
     pub(crate) fn next_remote_connect_generation(&mut self, id: &str) -> u64 {
         let generation = self
             .remote
@@ -351,6 +426,7 @@ impl DirectoryWindow {
                                     // helper; show its new state.
                                     view.refresh_remote_environment(cx);
                                 }
+                                view.reload_listing_inside_connected_remote(&status, cx);
                                 view.remote.statuses.insert(id.clone(), status);
                                 view.remote.retries.remove(&id);
                                 view.finish_remote_connect_sequence(&id, auto_connect, cx);

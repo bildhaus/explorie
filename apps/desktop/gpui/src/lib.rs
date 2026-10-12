@@ -25,7 +25,7 @@ use explorie_native_services::{
     SearchCriteria, SearchProgressEvent, SearchResult, SearchSource, SearchType, ServiceError,
     ServiceEvent, ServiceResult, SystemIntegrationStatus, SystemLocations, TextHighlightKind,
     TextPreview, UpdateInfo, VideoFrame, VideoStatus, WatcherEvent, WatcherState, format_exif_date,
-    is_image_metadata_path, validate_remote_drive_profile,
+    is_image_metadata_path, remote_mount_path, validate_remote_drive_profile,
 };
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use gpui::WindowControlArea;
@@ -1386,7 +1386,20 @@ fn most_specific_location_index(
         .enumerate()
         .filter(|(_, (_, path, _))| current_path.starts_with(path))
         .max_by_key(|(_, (_, path, _))| path.components().count())
+        .filter(|(_, (_, path, _))| !is_unlisted_macos_volume(current_path, path))
         .map(|(index, _)| index)
+}
+
+/// Whether `current_path` lies on a volume under /Volumes that no listed
+/// location claims, so only the startup disk at "/" matched it. On macOS
+/// every other disk, and every remote drive, mounts there, so such a path is
+/// never on the startup disk; highlighting it would be wrong.
+fn is_unlisted_macos_volume(current_path: &Path, matched: &Path) -> bool {
+    cfg!(target_os = "macos")
+        && matched == Path::new("/")
+        && current_path
+            .strip_prefix("/Volumes")
+            .is_ok_and(|volume| volume.components().next().is_some())
 }
 
 fn recovery_session_context(tab_count: usize, path: &Path) -> String {
