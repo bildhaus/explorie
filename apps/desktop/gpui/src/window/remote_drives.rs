@@ -280,10 +280,9 @@ impl DirectoryWindow {
     /// `path` while that drive is not connected. A folder there fails to load
     /// only because nothing is mounted, as when a restored window opens a
     /// drive that quitting disconnected.
+    /// Like the manager, the offer does not depend on the "Remote drives"
+    /// setting, which turns on automatic reconnects and status polling.
     pub(crate) fn disconnected_remote_for(&self, path: &Path) -> Option<DisconnectedRemote> {
-        if !self.settings.behavior.remote_drives_enabled {
-            return None;
-        }
         self.settings.remote_profiles.iter().find_map(|profile| {
             let status = self.remote.statuses.get(&profile.id);
             if status.is_some_and(|status| status.state == RemoteDriveState::Connected) {

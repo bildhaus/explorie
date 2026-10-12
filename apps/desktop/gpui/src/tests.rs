@@ -11431,8 +11431,10 @@ fn folder_in_a_disconnected_remote_drive_offers_to_connect_and_reloads(cx: &mut 
 
     // A restored window opens a folder inside the drive after quitting
     // disconnected it.
+    // With default settings: drives connected from the manager need the
+    // offer too, not only those that reconnect automatically.
     view.update(window, |view, cx| {
-        view.settings.behavior.remote_drives_enabled = true;
+        assert!(!view.settings.behavior.remote_drives_enabled);
         view.settings.remote_profiles = vec![profile];
         view.navigate_to(mount.join("reports"), cx);
     });
