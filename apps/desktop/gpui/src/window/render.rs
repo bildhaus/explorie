@@ -85,7 +85,7 @@ impl Render for DirectoryWindow {
         if !self.browser.search_query().is_empty() {
             filter_parts.push(format!("Searching \"{}\"", self.browser.search_query()));
         }
-        if !self.browser.show_hidden() && hidden_count > 0 {
+        if !listing_failed && !self.browser.show_hidden() && hidden_count > 0 {
             filter_parts.push(format!("{hidden_count} hidden"));
         }
         let filter_summary = (!filter_parts.is_empty()).then(|| filter_parts.join(" / "));

@@ -7950,13 +7950,18 @@ fn a_long_watcher_error_does_not_cover_the_status_item_summary(cx: &mut TestAppC
     );
 
     // A folder that could not be loaded is not known to be empty; the listing
-    // already says it could not be loaded.
+    // already says it could not be loaded. Entries kept from its last listing,
+    // as when a remote drive disconnects, must not be counted as hidden.
     view.update(window, |view, cx| {
+        let mut hidden = absolute_entry(directory.join(".hidden"));
+        hidden.hidden = true;
+        view.browser.replace_entries(vec![hidden]);
         view.listing.state = ListingState::Failed("No such file or directory".to_string());
         cx.notify();
     });
     window.run_until_parked();
     assert!(window.debug_bounds("status-item-summary").is_none());
+    assert!(window.debug_bounds("status-filter-summary").is_none());
     let watcher = window.debug_bounds("status-watcher-summary").unwrap();
     assert!(watcher.left() >= status.left() && watcher.right() <= status.right());
     remove_fixture(&directory);
@@ -11914,9 +11919,15 @@ fn the_remote_manager_shows_how_to_ready_the_helper_and_hints_each_field(cx: &mu
     let (view, window) =
         cx.add_window_view(|_, cx| DirectoryWindow::restore(root.clone(), false, services, cx));
     window.simulate_resize(gpui::size(px(1024.0), px(768.0)));
+    view.update(window, |view, cx| view.open_remote_drive_manager(cx));
+    // Opening the manager detects the environment in the background; let it
+    // finish so its result does not replace the ones set below.
+    wait_for_view(&view, window, "the remote environment", |view| {
+        view.remote.environment.is_some()
+    });
     view.update(window, |view, cx| {
         view.remote.available = vec!["cloud".to_string()];
-        view.open_remote_drive_manager(cx);
+        cx.notify();
     });
     window.run_until_parked();
 

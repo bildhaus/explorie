@@ -1066,6 +1066,100 @@ mod tests {
         }
     }
 
+    /// Reads real files, so an arrow or parquet upgrade that changes how
+    /// tables are decoded or printed shows up here.
+    #[cfg(feature = "preview-columnar")]
+    #[test]
+    fn parquet_and_arrow_tables_preview_their_schema_and_rows() {
+        use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+        use parquet::data_type::{ByteArray, ByteArrayType, Int64Type};
+        use parquet::file::properties::WriterProperties;
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::parser::parse_message_type;
+        use std::sync::Arc;
+
+        let temp = tempfile::tempdir().unwrap();
+        let texts = |preview: &RichPreview| {
+            preview
+                .blocks
+                .iter()
+                .map(|block| block.text.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let parquet_path = temp.path().join("table.parquet");
+        let schema = Arc::new(
+            parse_message_type("message table { required int64 id; required binary name (UTF8); }")
+                .unwrap(),
+        );
+        let mut writer = SerializedFileWriter::new(
+            File::create(&parquet_path).unwrap(),
+            schema,
+            Arc::new(WriterProperties::builder().build()),
+        )
+        .unwrap();
+        let mut group = writer.next_row_group().unwrap();
+        let mut column = group.next_column().unwrap().unwrap();
+        column
+            .typed::<Int64Type>()
+            .write_batch(&[1, 2], None, None)
+            .unwrap();
+        column.close().unwrap();
+        let mut column = group.next_column().unwrap().unwrap();
+        column
+            .typed::<ByteArrayType>()
+            .write_batch(
+                &[ByteArray::from("alpha"), ByteArray::from("beta")],
+                None,
+                None,
+            )
+            .unwrap();
+        column.close().unwrap();
+        group.close().unwrap();
+        writer.close().unwrap();
+        let rendered = preview(&parquet_path, temp.path()).unwrap();
+        assert_eq!(rendered.subtitle, "Apache Parquet table · bounded sample");
+        assert_eq!(
+            texts(&rendered),
+            [
+                "Rows · 2",
+                "Row groups · 1",
+                "id (INT64)  ·  name (BYTE_ARRAY)",
+                "{id: 1, name: \"alpha\"}",
+                "{id: 2, name: \"beta\"}",
+            ]
+        );
+
+        let arrow_path = temp.path().join("table.feather");
+        let batch = RecordBatch::try_from_iter([
+            ("id", Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef),
+            (
+                "name",
+                Arc::new(StringArray::from(vec!["alpha", "beta"])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let mut writer = arrow_ipc::writer::FileWriter::try_new(
+            File::create(&arrow_path).unwrap(),
+            &batch.schema(),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        let rendered = preview(&arrow_path, temp.path()).unwrap();
+        assert_eq!(rendered.subtitle, "Apache Arrow IPC table · bounded sample");
+        assert_eq!(
+            texts(&rendered),
+            [
+                "Rows displayed · 2",
+                "Record batches sampled · 1",
+                "id (Int64)  ·  name (Utf8)",
+                "1  ·  alpha",
+                "2  ·  beta",
+            ]
+        );
+    }
+
     #[test]
     fn cbz_preview_extracts_the_first_page_without_writing_to_the_source() {
         let temp = tempfile::tempdir().unwrap();
