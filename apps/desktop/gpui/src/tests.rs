@@ -8260,6 +8260,35 @@ fn go_to_folder_restores_shortcut_autocomplete_validation_recent_and_modal_geome
     remove_fixture(&directory);
 }
 
+/// Found on a real machine: after a remote drive mounted under a folder that
+/// had failed to load, the folder reloaded but "Watcher unavailable" stayed,
+/// even after Refresh, because nothing retried the watcher.
+#[gpui::test]
+fn retrying_a_folder_that_now_exists_restarts_its_watcher(cx: &mut TestAppContext) {
+    let directory = fixture_dir();
+    let missing = directory.join("not-mounted-yet");
+    let services = NativeServices::new(ResourcePaths::test(&directory));
+    let (view, window) =
+        cx.add_window_view(|_, cx| DirectoryWindow::new(directory.clone(), services, cx));
+    window.simulate_resize(gpui::size(px(800.0), px(600.0)));
+    view.update(window, |view, cx| view.navigate_to(missing.clone(), cx));
+    wait_for_view(&view, window, "the missing folder to fail", |view| {
+        matches!(view.listing.state, ListingState::Failed(_))
+            && matches!(view.watcher.status, WatchStatus::Unavailable(_))
+    });
+
+    fs::create_dir(&missing).unwrap();
+    fs::write(missing.join("arrived.txt"), "arrived").unwrap();
+    window.run_until_parked();
+    let retry = window.debug_bounds("retry-listing").unwrap().center();
+    window.simulate_click(retry, gpui::Modifiers::default());
+    wait_for_view(&view, window, "the folder and its watcher", |view| {
+        matches!(view.listing.state, ListingState::Ready)
+            && matches!(view.watcher.status, WatchStatus::Watching)
+    });
+    remove_fixture(&directory);
+}
+
 #[gpui::test]
 fn folder_load_failure_restores_retry_picker_and_recovery_geometry(cx: &mut TestAppContext) {
     let directory = fixture_dir();

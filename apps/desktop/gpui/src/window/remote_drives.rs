@@ -331,7 +331,7 @@ impl DirectoryWindow {
             .as_deref()
             .is_some_and(|root| path_is_within(self.browser.path(), root))
         {
-            self.start_listing(cx);
+            self.refresh(cx);
         }
     }
 

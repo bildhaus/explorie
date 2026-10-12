@@ -268,9 +268,7 @@ impl DirectoryWindow {
                                 } else {
                                     toolbar_button("retry-listing", "Try again", palette.accent)
                                         .debug_selector(|| "retry-listing".to_string())
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.start_listing(cx)),
-                                        )
+                                        .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
                                 },
                             ))
                             .child(

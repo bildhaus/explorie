@@ -347,6 +347,11 @@ impl DirectoryWindow {
         } else {
             self.start_listing(cx);
         }
+        // A watcher fails when its folder is missing, as inside a remote
+        // drive before it mounts; reloading once the folder exists retries it.
+        if matches!(self.watcher.status, WatchStatus::Unavailable(_)) {
+            self.start_watching(cx);
+        }
     }
 
     pub(crate) fn set_view_mode(&mut self, view_mode: ViewMode, cx: &mut Context<Self>) {
