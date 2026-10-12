@@ -447,11 +447,21 @@ jobs:
           node scripts/package-plugins.mjs --target "$target" --no-build
           mkdir -p "$RUNNER_TEMP/plugin-notarization"
           version=$(node -p "require('./package.json').version")
+          # A backed-up Apple notary queue otherwise holds --wait until the job
+          # timeout; fail fast and leave the submission for a later rerun.
+          notary_timeout=15m
+          notary_failed() {
+            if [ -s "$2" ]; then cat "$2"; fi
+            echo "::error::Notarization of $1 failed or did not finish within $notary_timeout. If 'xcrun notarytool history' shows it In Progress, Apple's queue is backed up: rerun the failed job once it is Accepted. If it shows Invalid, read 'xcrun notarytool log <submission id>'."
+            exit 1
+          }
           for plugin in syncthing git obsidian; do
             archive="release-artifacts/plugins-$target/explorie-plugin-$plugin-$version-$target.zip"
             proof="$RUNNER_TEMP/plugin-notarization/$plugin.json"
-            xcrun notarytool submit "$archive" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait --output-format json > "$proof"
-            node -e 'const p=require(process.argv[1]); if(p.status!=="Accepted") process.exit(1)' "$proof"
+            xcrun notarytool submit "$archive" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait --timeout "$notary_timeout" --output-format json > "$proof" \
+              || notary_failed "$archive" "$proof"
+            node -e 'const p=require(process.argv[1]); if(p.status!=="Accepted") process.exit(1)' "$proof" \
+              || notary_failed "$archive" "$proof"
             extracted="$RUNNER_TEMP/plugin-notarization/$plugin"
             mkdir -p "$extracted"
             ditto -x -k "$archive" "$extracted"
@@ -492,6 +502,18 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
+          # A backed-up Apple notary queue otherwise holds --wait until the job
+          # timeout; fail fast and leave the submission for a later rerun.
+          notary_timeout=15m
+          notary_failed() {
+            if [ -s "$2" ]; then cat "$2"; fi
+            echo "::error::Notarization of $1 failed or did not finish within $notary_timeout. If 'xcrun notarytool history' shows it In Progress, Apple's queue is backed up: rerun the failed job once it is Accepted. If it shows Invalid, read 'xcrun notarytool log <submission id>'."
+            exit 1
+          }
+          # notarytool can exit 0 for a rejected or still-pending submission.
+          notary_accepted() {
+            node -e 'const p=require(process.argv[1]); if(p.status!=="Accepted") process.exit(1)' "$1"
+          }
           app="target/release/bundle/macos/explorie.app"
           app_zip="$RUNNER_TEMP/explorie-notarization.zip"
           test -d "$app"
@@ -500,7 +522,11 @@ jobs:
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait
+            --wait \
+            --timeout "$notary_timeout" \
+            --output-format json > "$RUNNER_TEMP/notarization-app.json" \
+            || notary_failed "$app_zip" "$RUNNER_TEMP/notarization-app.json"
+          notary_accepted "$RUNNER_TEMP/notarization-app.json" || notary_failed "$app_zip" "$RUNNER_TEMP/notarization-app.json"
           xcrun stapler staple "$app"
 
           dmgs=(target/release/bundle/dmg/*.dmg)
@@ -524,7 +550,11 @@ jobs:
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait
+            --wait \
+            --timeout "$notary_timeout" \
+            --output-format json > "$RUNNER_TEMP/notarization-dmg.json" \
+            || notary_failed "${dmgs[0]}" "$RUNNER_TEMP/notarization-dmg.json"
+          notary_accepted "$RUNNER_TEMP/notarization-dmg.json" || notary_failed "${dmgs[0]}" "$RUNNER_TEMP/notarization-dmg.json"
           xcrun stapler staple "${dmgs[0]}"
 
       - name: Verify and stage macOS package
