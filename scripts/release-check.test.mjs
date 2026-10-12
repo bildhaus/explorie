@@ -774,6 +774,24 @@ test('CI tests cannot hang a runner: nextest kills stuck tests and steps are bou
   assert.doesNotMatch(workflowEnv.replace(/^  CARGO_TERM_COLOR: always\n/m, ''), /^  (RUST|CARGO)_/m);
 });
 
+test('release notarization fails fast when Apple\'s queue stalls', async () => {
+  // Without a bound, `notarytool submit --wait` holds the macOS job until its
+  // timeout during an Apple backlog, with no hint about what went wrong.
+  const release = await readFile(path.join(process.cwd(), '.github/workflows/build-release.yml'), 'utf8');
+  const submissions = [...release.matchAll(/notarytool submit [\s\S]*?(?=\n\s*(?:\|\||xcrun|node|$))/g)]
+    .map(match => match[0]);
+  assert.equal(submissions.length, 3);
+  for (const submission of submissions) {
+    assert.match(submission, /--wait/, submission);
+    assert.match(submission, /--timeout "\$notary_timeout"/, submission);
+    assert.match(submission, /--output-format json > /, submission);
+  }
+  assert.equal([...release.matchAll(/^          notary_timeout=\d+m$/gm)].length, 2);
+  assert.equal([...release.matchAll(/notary_failed /g)].length, 6);
+  assert.match(release, /notary_accepted "\$RUNNER_TEMP\/notarization-app\.json"/);
+  assert.match(release, /notary_accepted "\$RUNNER_TEMP\/notarization-dmg\.json"/);
+});
+
 test('Objective-C linked into the app avoids @available', async () => {
   // @available compiles to a call into the compiler runtime
   // (__isPlatformVersionAtLeast) that the Rust link does not include, so a
