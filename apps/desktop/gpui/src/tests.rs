@@ -11919,9 +11919,15 @@ fn the_remote_manager_shows_how_to_ready_the_helper_and_hints_each_field(cx: &mu
     let (view, window) =
         cx.add_window_view(|_, cx| DirectoryWindow::restore(root.clone(), false, services, cx));
     window.simulate_resize(gpui::size(px(1024.0), px(768.0)));
+    view.update(window, |view, cx| view.open_remote_drive_manager(cx));
+    // Opening the manager detects the environment in the background; let it
+    // finish so its result does not replace the ones set below.
+    wait_for_view(&view, window, "the remote environment", |view| {
+        view.remote.environment.is_some()
+    });
     view.update(window, |view, cx| {
         view.remote.available = vec!["cloud".to_string()];
-        view.open_remote_drive_manager(cx);
+        cx.notify();
     });
     window.run_until_parked();
 
