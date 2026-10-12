@@ -44,14 +44,26 @@ int explorie_mount_helper_register(char **error) {
         [service unregisterAndReturnError:&failure];
         failure = nil;
     }
-    if (service.status == SMAppServiceStatusNotRegistered && ![service registerAndReturnError:&failure]) {
+    // A daemon that was never registered reports NotFound rather than
+    // NotRegistered, so a fresh install must register from either state.
+    // Registering a daemon the user has not approved yet fails with
+    // "Operation not permitted" while leaving it listed for approval; that
+    // is the expected first step, not an error.
+    SMAppServiceStatus status = service.status;
+    if ((status == SMAppServiceStatusNotRegistered || status == SMAppServiceStatusNotFound)
+        && ![service registerAndReturnError:&failure]
+        && service.status != SMAppServiceStatusRequiresApproval) {
         if (error != NULL) {
             NSString *message = failure.localizedDescription ?: @"macOS refused to register the Remote Drives helper.";
             *error = strdup(message.UTF8String);
         }
         return -1;
     }
-    return explorie_mount_helper_status();
+    int result = explorie_mount_helper_status();
+    if (result != 1 && result != 2 && error != NULL) {
+        *error = strdup("macOS accepted the Remote Drives helper but does not list it. Move Explorie to the Applications folder and try again.");
+    }
+    return result;
 }
 
 int explorie_mount_helper_unregister(void) {

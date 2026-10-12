@@ -805,6 +805,19 @@ test('Objective-C linked into the app avoids @available', async () => {
   }
 });
 
+test('the mount helper registers on a fresh install', async () => {
+  // macOS reports a daemon that was never registered as NotFound, not
+  // NotRegistered, and fails its first registration with "Operation not
+  // permitted" until the user approves it. Missing either left every fresh
+  // install with "Unable to install the Remote Drives helper".
+  const bridge = await readFile(path.join(process.cwd(), 'apps/desktop/native-assets/macos/MountBridge.m'), 'utf8');
+  const register = bridge.slice(bridge.indexOf('int explorie_mount_helper_register'), bridge.indexOf('int explorie_mount_helper_unregister'));
+  assert.match(register, /SMAppServiceStatusNotFound[\s\S]*registerAndReturnError/);
+  assert.match(register, /result != 1 && result != 2 && error != NULL/);
+  // Registering an unapproved daemon fails yet leaves it waiting for approval.
+  assert.match(register, /registerAndReturnError:&failure\]\s*&& service\.status != SMAppServiceStatusRequiresApproval/);
+});
+
 test('CI lints macOS-only code without enabling runtime shaders', async () => {
   const ci = await readFile(path.join(process.cwd(), '.github/workflows/ci.yml'), 'utf8');
   const macos = ci.match(/name: macOS GPUI Tests & Build[\s\S]*?(?=\n  [a-z-]+:\n)/)?.[0] ?? '';

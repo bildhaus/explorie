@@ -11444,7 +11444,8 @@ fn remote_test_environment(helper_status: &str) -> RemoteDriveEnvironment {
 
 /// Found on a real machine: once a click elsewhere took the focus away from
 /// the profile editor's field, clicking the field again did not focus it,
-/// so typing went nowhere.
+/// so typing went nowhere. The dialog let clicks through to the file list
+/// underneath, which took the focus back on every click.
 #[gpui::test]
 fn the_remote_editor_field_takes_focus_back_when_clicked(cx: &mut TestAppContext) {
     let root = fixture_dir();
@@ -11471,14 +11472,23 @@ fn the_remote_editor_field_takes_focus_back_when_clicked(cx: &mut TestAppContext
     };
     assert!(field_focused(window), "the new editor field starts focused");
 
-    // A click outside the field, on the status bar, takes the focus away.
+    // Clicks on the dialog's backdrop, over the file list, stay in the dialog.
     window.simulate_click(
-        gpui::point(px(500.0), px(760.0)),
+        gpui::point(px(500.0), px(740.0)),
         gpui::Modifiers::default(),
     );
     window.run_until_parked();
-    assert!(!field_focused(window));
+    assert!(
+        field_focused(window),
+        "the file list behind the dialog is not clickable"
+    );
 
+    // However the focus left, clicking the field brings it back, and the file
+    // list underneath does not take it.
+    let list_focus = view.read_with(window, |view, _| view.focus_handle.clone());
+    window.update(|window, cx| window.focus(&list_focus, cx));
+    window.run_until_parked();
+    assert!(!field_focused(window));
     let field = window
         .debug_bounds("remote-profile-editor-field")
         .expect("the editor field renders");
