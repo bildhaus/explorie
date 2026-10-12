@@ -1083,6 +1083,7 @@ impl DirectoryWindow {
         div()
             .id("control-surface-backdrop")
             .debug_selector(|| "control-surface-backdrop".to_string())
+            .occlude()
             .absolute()
             .inset_0()
             .flex()

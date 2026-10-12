@@ -1865,11 +1865,11 @@ mod macos {
     }
 
     pub fn status() -> String {
+        // macOS reports a never-registered daemon as NotFound (3).
         match unsafe { explorie_mount_helper_status() } {
-            0 => "not-registered",
             1 => "enabled",
             2 => "approval-required",
-            _ => "unavailable",
+            _ => "not-registered",
         }
         .to_string()
     }

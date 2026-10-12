@@ -593,6 +593,7 @@ impl DirectoryWindow {
         div()
             .id("mutation-exit-backdrop")
             .debug_selector(|| "mutation-exit-backdrop".to_string())
+            .occlude()
             .absolute()
             .inset_0()
             .flex()
