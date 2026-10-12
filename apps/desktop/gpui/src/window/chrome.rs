@@ -374,6 +374,62 @@ impl DirectoryWindow {
             .into_any_element()
     }
 
+    /// The sidebar's Locations as (label, path, icon): the standard folders,
+    /// the volumes, then the connected remote drives. `None` until the
+    /// system locations load.
+    pub(crate) fn sidebar_locations(&self) -> Option<Vec<(String, PathBuf, &'static str)>> {
+        let locations = self.system.locations.as_ref()?;
+        let mut locations_with_labels = Vec::new();
+        for (label, path, icon) in [
+            ("Home", locations.home.as_ref(), "home"),
+            ("Desktop", locations.desktop.as_ref(), "desktop"),
+            ("Documents", locations.documents.as_ref(), "file"),
+            ("Downloads", locations.downloads.as_ref(), "download"),
+            ("Music", locations.music.as_ref(), "music"),
+            ("Pictures", locations.pictures.as_ref(), "image"),
+            ("Videos", locations.videos.as_ref(), "video"),
+        ] {
+            if let Some(path) = path {
+                locations_with_labels.push((label.to_string(), PathBuf::from(path), icon));
+            }
+        }
+        // The volume list leaves remote mounts out and is only read at
+        // startup, so remote drives come from their live status, by the name
+        // the user gave them.
+        let remotes: Vec<(String, PathBuf, &'static str)> = self
+            .settings
+            .remote_profiles
+            .iter()
+            .filter_map(|profile| {
+                let status = self.remote.statuses.get(&profile.id)?;
+                let path = status.mount_path.clone()?;
+                (status.state == RemoteDriveState::Connected)
+                    .then(|| (profile.name.clone(), path, "cloud"))
+            })
+            .collect();
+        let is_remote = |path: &Path| remotes.iter().any(|(_, remote, _)| remote == path);
+        if locations.volumes.is_empty() {
+            for drive in &locations.drives {
+                if !is_remote(Path::new(drive)) {
+                    locations_with_labels.push((drive.clone(), PathBuf::from(drive), "drive"));
+                }
+            }
+        }
+        for volume in &locations.volumes {
+            if !is_remote(Path::new(&volume.path)) {
+                locations_with_labels.push((
+                    volume_label(volume),
+                    PathBuf::from(&volume.path),
+                    "drive",
+                ));
+            }
+        }
+        locations_with_labels.extend(remotes);
+        let mut seen = std::collections::HashSet::new();
+        locations_with_labels.retain(|(_, path, _)| seen.insert(path.clone()));
+        Some(locations_with_labels)
+    }
+
     pub(crate) fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         #[cfg(test)]
         {
@@ -690,35 +746,7 @@ impl DirectoryWindow {
             .child(favorites_drop_target);
 
         let mut location_rows = Vec::new();
-        if let Some(locations) = &self.system.locations {
-            let mut locations_with_labels = Vec::new();
-            for (label, path, icon) in [
-                ("Home", locations.home.as_ref(), "home"),
-                ("Desktop", locations.desktop.as_ref(), "desktop"),
-                ("Documents", locations.documents.as_ref(), "file"),
-                ("Downloads", locations.downloads.as_ref(), "download"),
-                ("Music", locations.music.as_ref(), "music"),
-                ("Pictures", locations.pictures.as_ref(), "image"),
-                ("Videos", locations.videos.as_ref(), "video"),
-            ] {
-                if let Some(path) = path {
-                    locations_with_labels.push((label.to_string(), PathBuf::from(path), icon));
-                }
-            }
-            if locations.volumes.is_empty() {
-                for drive in &locations.drives {
-                    locations_with_labels.push((drive.clone(), PathBuf::from(drive), "drive"));
-                }
-            }
-            for volume in &locations.volumes {
-                locations_with_labels.push((
-                    volume_label(volume),
-                    PathBuf::from(&volume.path),
-                    "drive",
-                ));
-            }
-            let mut seen = std::collections::HashSet::new();
-            locations_with_labels.retain(|(_, path, _)| seen.insert(path.clone()));
+        if let Some(locations_with_labels) = self.sidebar_locations() {
             let active_location =
                 most_specific_location_index(&current_path, &locations_with_labels);
             for (index, (label, path, icon)) in locations_with_labels.into_iter().enumerate() {

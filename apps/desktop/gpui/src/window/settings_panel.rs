@@ -248,6 +248,7 @@ impl DirectoryWindow {
             PendingDraftAction::CloseControlSurface => {
                 self.close_control_surface_unchecked(cx);
             }
+            PendingDraftAction::CloseControlEditor => self.close_control_editor(cx),
             PendingDraftAction::OpenControlSurface(surface) => {
                 self.open_control_surface_unchecked(surface, cx);
             }

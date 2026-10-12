@@ -274,6 +274,7 @@ impl DirectoryWindow {
             workspace_store,
             workspace_ui: WorkspaceUi::default(),
             smart_folder_editor: None,
+            smart_folder_baseline: None,
             layout: WindowLayout {
                 sidebar_width,
                 sidebar_collapsed: false,

@@ -90,7 +90,7 @@ impl SmartFolderField {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SmartFolderDraft {
     pub(crate) id: Option<u64>,
     pub(crate) field: SmartFolderField,
@@ -137,6 +137,16 @@ impl SmartFolderDraft {
             recursive: criteria.recursive,
             combine_mode: criteria.combine_mode,
         }
+    }
+
+    /// Whether both drafts describe the same smart folder, whichever field
+    /// each is editing.
+    pub(crate) fn same_content(&self, other: &Self) -> bool {
+        *self
+            == Self {
+                field: self.field,
+                ..other.clone()
+            }
     }
 
     pub(crate) fn value(&self, field: SmartFolderField) -> &str {

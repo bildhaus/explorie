@@ -14,6 +14,23 @@ pub(crate) fn path_base_name(path: &std::path::Path) -> ServiceResult<String> {
         })
 }
 
+/// Whether `path` lies inside `root`, ignoring case on Windows, whose drive
+/// letters and folder names ignore it.
+pub(crate) fn path_is_within(path: &Path, root: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let mut path = path.components();
+        root.components().all(|root| {
+            path.next()
+                .is_some_and(|path| path.as_os_str().eq_ignore_ascii_case(root.as_os_str()))
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        path.starts_with(root)
+    }
+}
+
 pub(crate) fn remote_status(
     id: &str,
     state: RemoteDriveState,
@@ -198,6 +215,9 @@ impl RemoteEditorField {
 #[derive(Clone, Debug)]
 pub(crate) struct RemoteProfileEditor {
     pub(crate) draft: RemoteDriveProfile,
+    /// The profile as the editor opened it, so closing an unchanged editor
+    /// does not ask to discard anything.
+    pub(crate) original: RemoteDriveProfile,
     pub(crate) field: RemoteEditorField,
 }
 

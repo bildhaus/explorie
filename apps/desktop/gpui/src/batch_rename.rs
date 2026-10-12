@@ -214,6 +214,28 @@ impl BatchRenameEditor {
         }
     }
 
+    /// Whether any rename option differs from how the editor opened.
+    pub fn has_changes(&self) -> bool {
+        let opened = Self::new(&[]);
+        let options = |editor: &Self| {
+            (
+                editor.mode,
+                editor.primary.clone(),
+                editor.secondary.clone(),
+                editor.replace_all,
+                editor.regex_case_insensitive,
+                editor.regex_multiline,
+                editor.number_start,
+                editor.number_digits,
+                editor.position,
+                editor.case_mode,
+                editor.case_target,
+                editor.date_source,
+            )
+        };
+        options(self) != options(&opened)
+    }
+
     pub fn set_mode(&mut self, mode: BatchRenameMode) {
         self.mode = mode;
         self.field = BatchRenameField::Primary;

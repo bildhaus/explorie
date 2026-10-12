@@ -544,7 +544,7 @@ impl RemoteDriveService {
             ));
         }
 
-        let mount_path = mount_path(profile)?;
+        let mount_path = remote_mount_path(profile)?;
         ensure_mount_target_available(&mount_path)?;
         let cache_dir = profile_cache_dir(&self.context.resources().cache_dir, &profile.id);
         fs::create_dir_all(&cache_dir).map_err(ServiceError::from)?;
@@ -1050,7 +1050,9 @@ fn remote_spec(profile: &RemoteDriveProfile) -> String {
     }
 }
 
-fn mount_path(profile: &RemoteDriveProfile) -> ServiceResult<PathBuf> {
+/// Where `profile` mounts: its drive letter root on Windows, or
+/// `/Volumes/<volume name>` on macOS. The path need not exist.
+pub fn remote_mount_path(profile: &RemoteDriveProfile) -> ServiceResult<PathBuf> {
     #[cfg(windows)]
     return Ok(PathBuf::from(format!(
         "{}\\",
