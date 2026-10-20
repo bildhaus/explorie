@@ -1,0 +1,14 @@
+# cargo-audit configuration (PR CI and the Scheduled Security Audit run plain
+# `cargo audit`). Every ignore needs a reason and should be removed as soon as
+# the dependency graph no longer needs it.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0381 (distrusted emSign root) is fixed in webpki-roots
+    # 1.0.10, which Cargo.lock uses. It also flags webpki-roots 0.26.11, the
+    # semver-trick shim that ureq 2.x depends on: the shim carries no roots of
+    # its own and re-exports webpki-roots 1.x, so it resolves to the patched
+    # 1.0.10 too. Keep in sync with deny.toml, and remove once ureq moves to
+    # webpki-roots 1 (ureq 3).
+    "RUSTSEC-2026-0381",
+]

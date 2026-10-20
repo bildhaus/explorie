@@ -20,7 +20,15 @@ all-features = false
 unmaintained = "workspace"
 unsound = "workspace"
 yanked = "deny"
-ignore = []
+ignore = [
+    # RUSTSEC-2026-0381 (distrusted emSign root) is fixed in webpki-roots
+    # 1.0.10, which Cargo.lock uses. It also flags webpki-roots 0.26.11, the
+    # semver-trick shim that ureq 2.x depends on: the shim carries no roots of
+    # its own and re-exports webpki-roots 1.x, so it resolves to the patched
+    # 1.0.10 too. Keep in sync with .cargo/audit.toml, and remove once ureq
+    # moves to webpki-roots 1 (ureq 3).
+    { id = "RUSTSEC-2026-0381", reason = "only the webpki-roots 0.26.11 shim is flagged; it re-exports the patched webpki-roots 1.0.10" },
+]
 
 [licenses]
 # Every license here permits distributing Explorie's binaries under MIT.

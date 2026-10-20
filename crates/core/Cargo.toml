@@ -12,7 +12,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 uuid = { version = "1.8", features = ["v4", "v5", "serde"] }
 rayon = "1.10"
-zip = { version = "2.2", default-features = false, features = ["deflate", "bzip2", "zstd", "time", "aes-crypto"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate", "bzip2", "zstd", "time", "aes-crypto"] }
 walkdir = "2.5"
 flate2 = "1.0"
 tar = "0.4"
