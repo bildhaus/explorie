@@ -1804,6 +1804,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dirs"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d57d423b3c82e89b9a24ca3091fee61f456a26edbd28d26c65906f4bc1dcd8f"
+dependencies = [
+ "dirs-sys",
+]
+
+[[package]]
 name = "dirs-sys"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2102,7 +2111,7 @@ version = "0.0.1"
 dependencies = [
  "chrono",
  "cocoa 0.26.0",
- "dirs",
+ "dirs 7.0.0",
  "drag",
  "embed-resource",
  "explorie-core",
@@ -2134,7 +2143,7 @@ dependencies = [
  "arrow-ipc",
  "asset-importer",
  "cc",
- "dirs",
+ "dirs 7.0.0",
  "explorie-core",
  "explorie-plugin-protocol",
  "fontdue",
@@ -2205,7 +2214,7 @@ dependencies = [
 name = "explorie-plugin-syncthing"
 version = "0.0.1"
 dependencies = [
- "dirs",
+ "dirs 7.0.0",
  "explorie-plugin-protocol",
  "roxmltree 0.20.0",
  "rustls",
@@ -7456,7 +7465,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -9361,7 +9370,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9602,7 +9611,7 @@ dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
  "core-text",
- "dirs",
+ "dirs 6.0.0",
  "dwrote",
  "float-ord",
  "freetype-sys",
