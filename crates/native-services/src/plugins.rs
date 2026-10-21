@@ -904,7 +904,10 @@ fn extract_package(bytes: &[u8], directory: &Path) -> ServiceResult<()> {
         let mut file = archive
             .by_index(index)
             .map_err(|_| failure("Invalid integration archive entry"))?;
-        let name = file.name().to_owned();
+        let name = file
+            .name()
+            .map_err(|_| failure("Invalid integration archive entry"))?
+            .into_owned();
         if name.contains(['\\', ':'])
             || file.enclosed_name().is_none()
             || Path::new(&name)

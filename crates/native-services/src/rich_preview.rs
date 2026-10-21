@@ -307,7 +307,7 @@ fn ebook_preview(path: &Path, cache: &Path, comic: bool) -> ServiceResult<RichPr
     let mut package_name = None;
     for index in 0..archive.len().min(20_000) {
         let entry = archive.by_index(index).map_err(zip_error)?;
-        let name = entry.name().to_string();
+        let name = entry.name().map_err(zip_error)?.into_owned();
         let lower = name.to_ascii_lowercase();
         if is_archive_image(&lower) {
             image_names.push(name.clone());

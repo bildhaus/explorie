@@ -869,7 +869,7 @@ fn add_directory_to_zip_with_progress<'a, W: Write + io::Seek>(
     zip: &mut ZipWriter<W>,
     dir_path: &Path,
     base_path: &Path,
-    options: zip::write::FileOptions<'a, ()>,
+    options: zip::write::FileOptions<'a, 'a, ()>,
     progress: &mut impl FnMut(&Path, u64),
 ) -> io::Result<u64> {
     let mut total_bytes: u64 = 0;
@@ -913,7 +913,7 @@ fn add_file_to_zip_with_progress<'a, W: Write + io::Seek>(
     zip: &mut ZipWriter<W>,
     file_path: &Path,
     archive_name: &str,
-    options: zip::write::FileOptions<'a, ()>,
+    options: zip::write::FileOptions<'a, 'a, ()>,
     progress: &mut impl FnMut(&Path, u64),
 ) -> io::Result<u64> {
     let size = write_file_to_zip(zip, file_path, archive_name, options)?;
@@ -925,7 +925,7 @@ fn add_directory_to_zip<'a, W: Write + io::Seek>(
     zip: &mut ZipWriter<W>,
     dir_path: &Path,
     base_path: &Path,
-    options: zip::write::FileOptions<'a, ()>,
+    options: zip::write::FileOptions<'a, 'a, ()>,
 ) -> io::Result<u64> {
     let mut total_bytes: u64 = 0;
     let base_name = base_path
@@ -967,7 +967,7 @@ fn add_file_to_zip<'a, W: Write + io::Seek>(
     zip: &mut ZipWriter<W>,
     file_path: &Path,
     archive_name: &str,
-    options: zip::write::FileOptions<'a, ()>,
+    options: zip::write::FileOptions<'a, 'a, ()>,
 ) -> io::Result<u64> {
     write_file_to_zip(zip, file_path, archive_name, options)
 }
@@ -976,7 +976,7 @@ fn write_file_to_zip<'a, W: Write + io::Seek>(
     zip: &mut ZipWriter<W>,
     file_path: &Path,
     archive_name: &str,
-    options: zip::write::FileOptions<'a, ()>,
+    options: zip::write::FileOptions<'a, 'a, ()>,
 ) -> io::Result<u64> {
     let mut file = open_regular_file_without_links(file_path)?;
     let metadata = file.metadata()?;
@@ -1219,7 +1219,7 @@ fn extract_zip_archive_into(
             archive.by_index(i)?
         };
         budget.begin_entry(file.size())?;
-        let name = file.name().to_string();
+        let name = file.name()?.to_string();
         let entry_path = Path::new(&name);
         let out_path = ensure_safe_extraction_path(output_dir, entry_path)?;
         if file
@@ -1346,7 +1346,7 @@ pub fn list_zip_contents(archive_path: &Path) -> io::Result<ArchiveInfo> {
 
     for i in 0..archive.len() {
         let file = archive.by_index_raw(i)?;
-        let name = file.name().to_string();
+        let name = file.name()?.to_string();
         let is_dir = name.ends_with('/');
         let size = file.size();
         let comp_size = file.compressed_size();
