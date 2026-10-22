@@ -481,19 +481,30 @@ fn is_sha256(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|value| value.is_ascii_hexdigit())
 }
 
+/// HTTP agent for release requests. Mirrors the ureq 2 agent this replaced:
+/// per-read/per-write socket timeouts, no proxy discovery from the environment,
+/// and at most four redirects (ureq 2's limit of 5 counted the final response).
+fn release_agent(read_timeout: Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .proxy(None)
+        .max_redirects(4)
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_per_read(Some(read_timeout))
+        .timeout_per_write(Some(Duration::from_secs(30)))
+        .build()
+        .new_agent()
+}
+
 fn get_bytes(url: &str, limit: u64) -> ServiceResult<Vec<u8>> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(30))
-        .timeout_write(Duration::from_secs(30))
-        .build();
-    let request = agent
+    let response = release_agent(Duration::from_secs(30))
         .get(url)
-        .set("User-Agent", "explorie-updater")
-        .set("Accept", "application/vnd.github+json");
-    let response = request.call().map_err(network_error)?;
+        .header("User-Agent", "explorie-updater")
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(network_error)?;
     let mut bytes = Vec::new();
     response
+        .into_body()
         .into_reader()
         .take(limit.saturating_add(1))
         .read_to_end(&mut bytes)
@@ -513,17 +524,12 @@ fn download_installer(
     expected_size: u64,
     expected_sha256: &str,
 ) -> ServiceResult<()> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(60))
-        .timeout_write(Duration::from_secs(30))
-        .build();
-    let response = agent
+    let response = release_agent(Duration::from_secs(60))
         .get(url)
-        .set("User-Agent", "explorie-updater")
+        .header("User-Agent", "explorie-updater")
         .call()
         .map_err(network_error)?;
-    let mut reader = response.into_reader();
+    let mut reader = response.into_body().into_reader();
     let mut file = File::create(path).map_err(ServiceError::from)?;
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
@@ -1315,6 +1321,77 @@ mod tests {
                 assert_eq!(fs::read(&path).unwrap(), payload);
             }
         }
+    }
+
+    /// Serves one canned response per connection and returns each raw request.
+    fn serve(responses: Vec<String>) -> (String, thread::JoinHandle<Vec<String>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            responses
+                .into_iter()
+                .map(|response| {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut request = [0_u8; 4096];
+                    let size = stream.read(&mut request).unwrap();
+                    stream.write_all(response.as_bytes()).unwrap();
+                    String::from_utf8_lossy(&request[..size]).to_ascii_lowercase()
+                })
+                .collect()
+        });
+        (base, server)
+    }
+
+    #[test]
+    fn release_requests_send_headers_follow_redirects_and_bound_responses() {
+        let body = "{\"tag_name\":\"v0.2.9\"}";
+        let (base, server) = serve(vec![
+            "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        ]);
+        let bytes = get_bytes(&format!("{base}/latest"), 1024).unwrap();
+        assert_eq!(bytes, body.as_bytes());
+        let requests = server.join().unwrap();
+        assert!(requests[0].starts_with("get /latest "));
+        assert!(requests[1].starts_with("get /final "));
+        for request in &requests {
+            assert!(request.contains("user-agent: explorie-updater\r\n"));
+            assert!(request.contains("accept: application/vnd.github+json\r\n"));
+        }
+
+        let (base, server) = serve(vec![format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )]);
+        let error = get_bytes(&base, body.len() as u64 - 1).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidInput);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn release_http_errors_are_retryable_network_failures() {
+        let (base, server) = serve(vec![
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        ]);
+        let error = get_bytes(&base, 1024).unwrap_err();
+        server.join().unwrap();
+        assert_eq!(error.code, ErrorCode::RemoteUnavailable);
+        assert!(error.retryable);
+        assert!(error.message.contains("404"), "{}", error.message);
+
+        // Connection failures map the same way.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", closed.local_addr().unwrap());
+        drop(closed);
+        let error = get_bytes(&url, 1024).unwrap_err();
+        assert_eq!(error.code, ErrorCode::RemoteUnavailable);
+        assert!(error.retryable);
     }
 
     #[test]

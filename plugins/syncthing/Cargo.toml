@@ -8,7 +8,9 @@ license = "MIT"
 explorie-plugin-protocol = { path = "../../crates/plugin-protocol" }
 serde_json = "1"
 url = "2"
-ureq = { version = "2.12", default-features = false, features = ["tls"] }
+# `~` because the pinned-certificate TLS connector uses `ureq::unversioned`,
+# which ureq may change in minor releases.
+ureq = { version = "~3.5", default-features = false, features = ["rustls"] }
 roxmltree = "0.20"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 dirs = "7"
