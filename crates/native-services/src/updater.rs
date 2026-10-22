@@ -1324,10 +1324,10 @@ mod tests {
     }
 
     /// Serves one canned response per connection and returns each raw request.
-    fn serve(responses: Vec<String>) -> (String, thread::JoinHandle<Vec<String>>) {
+    fn serve(responses: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let server = thread::spawn(move || {
+        let server = std::thread::spawn(move || {
             responses
                 .into_iter()
                 .map(|response| {
