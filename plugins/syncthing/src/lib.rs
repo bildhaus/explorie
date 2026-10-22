@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
@@ -15,6 +15,11 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use serde_json::Value;
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, Either, LazyBuffers, NextTimeout, TcpConnector,
+    Transport, TransportAdapter,
+};
 
 const MAX_RESPONSE: u64 = 4 * 1024 * 1024;
 
@@ -68,6 +73,100 @@ impl ServerCertVerifier for LocalCertificate {
             .signature_verification_algorithms
             .supported_schemes()
     }
+}
+
+/// Wraps the TCP transport in TLS using the pinned-certificate rustls config.
+///
+/// ureq 3 cannot take a custom `rustls::ClientConfig` (or verifier) through its
+/// `TlsConfig`, so this mirrors ureq's own `RustlsConnector` with our config.
+/// Without a pin it refuses HTTPS instead of falling back to public roots.
+#[derive(Debug)]
+struct PinnedTls(Option<Arc<rustls::ClientConfig>>);
+
+impl<In: Transport> Connector<In> for PinnedTls {
+    type Out = Either<In, PinnedTlsTransport>;
+
+    fn connect(
+        &self,
+        details: &ConnectionDetails,
+        chained: Option<In>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
+        let Some(transport) = chained else {
+            return Ok(None);
+        };
+        if !details.needs_tls() || transport.is_tls() {
+            return Ok(Some(Either::A(transport)));
+        }
+        let config = self.0.clone().ok_or(ureq::Error::Tls(
+            "HTTPS requires a pinned Syncthing certificate",
+        ))?;
+        let host = details
+            .uri
+            .host()
+            .ok_or(ureq::Error::Tls("Missing TLS server name"))?;
+        let name = ServerName::try_from(host.trim_start_matches('[').trim_end_matches(']'))
+            .map_err(|_| ureq::Error::Tls("Invalid TLS server name"))?
+            .to_owned();
+        let mut connection = rustls::ClientConnection::new(config, name)
+            .map_err(|_| ureq::Error::Tls("Could not start the TLS session"))?;
+        let mut socket = TransportAdapter::new(transport.boxed(), details.current_time.clone());
+        socket.set_timeout(details.timeout);
+        connection.complete_io(&mut socket)?;
+        Ok(Some(Either::B(PinnedTlsTransport {
+            buffers: LazyBuffers::new(
+                details.config.input_buffer_size(),
+                details.config.output_buffer_size(),
+            ),
+            stream: rustls::StreamOwned::new(connection, socket),
+        })))
+    }
+}
+
+struct PinnedTlsTransport {
+    buffers: LazyBuffers,
+    stream: rustls::StreamOwned<rustls::ClientConnection, TransportAdapter>,
+}
+
+impl std::fmt::Debug for PinnedTlsTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PinnedTlsTransport").finish_non_exhaustive()
+    }
+}
+
+impl Transport for PinnedTlsTransport {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        &mut self.buffers
+    }
+    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        self.stream.get_mut().set_timeout(timeout);
+        self.stream.write_all(&self.buffers.output()[..amount])?;
+        Ok(())
+    }
+    fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        self.stream.get_mut().set_timeout(timeout);
+        let amount = self.stream.read(self.buffers.input_append_buf())?;
+        self.buffers.input_appended(amount);
+        Ok(amount > 0)
+    }
+    fn is_open(&mut self) -> bool {
+        self.stream.get_mut().get_mut().is_open()
+    }
+    fn is_tls(&self) -> bool {
+        true
+    }
+}
+
+/// Agent for the local Syncthing API: no proxies, no redirects, a 2 s connect
+/// timeout within the overall `timeout`, and TLS only through the pin.
+fn api_agent(tls: Option<Arc<rustls::ClientConfig>>, timeout: Duration) -> ureq::Agent {
+    let config = ureq::Agent::config_builder()
+        .proxy(None)
+        .max_redirects(0)
+        .timeout_global(Some(timeout))
+        .timeout_connect(Some(Duration::from_secs(2)))
+        .build();
+    let connector = ().chain(TcpConnector::default()).chain(PinnedTls(tls));
+    ureq::Agent::with_parts(config, connector, DefaultResolver::default())
 }
 
 #[derive(Clone)]
@@ -155,11 +254,7 @@ fn load_connection(path: &Path) -> Result<Connection, String> {
     if api_key.is_empty() || api_key.contains(['\r', '\n']) {
         return Err("Syncthing API key is missing or invalid".into());
     }
-    let mut builder = ureq::AgentBuilder::new()
-        .try_proxy_from_env(false)
-        .redirects(0)
-        .timeout(Duration::from_secs(5))
-        .timeout_connect(Duration::from_secs(2));
+    let mut tls = None;
     if url.scheme() == "https" {
         let certificate_path = path
             .parent()
@@ -187,7 +282,7 @@ fn load_connection(path: &Path) -> Result<Connection, String> {
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(LocalCertificate(certificate)))
         .with_no_client_auth();
-        builder = builder.tls_config(Arc::new(config));
+        tls = Some(Arc::new(config));
     }
     let mut folders = Vec::new();
     for node in document
@@ -220,7 +315,7 @@ fn load_connection(path: &Path) -> Result<Connection, String> {
         });
     }
     Ok(Connection {
-        agent: builder.build(),
+        agent: api_agent(tls, Duration::from_secs(5)),
         url,
         api_key,
         folders,
@@ -233,15 +328,18 @@ impl Connection {
             .url
             .join(endpoint)
             .map_err(|_| "Invalid local API endpoint")?;
-        let mut request = self.agent.get(url.as_str()).set("X-API-Key", &self.api_key);
+        let mut request = self
+            .agent
+            .get(url.as_str())
+            .header("X-API-Key", &self.api_key);
         for (key, value) in query {
             request = request.query(key, value);
         }
         let response = request.call().map_err(|error| match error {
-            ureq::Error::Status(401 | 403, _) => {
+            ureq::Error::StatusCode(401 | 403) => {
                 "Syncthing authentication failed; reconnect using its current config.xml".to_owned()
             }
-            ureq::Error::Status(_, _) => "Syncthing API returned an error".to_owned(),
+            ureq::Error::StatusCode(_) => "Syncthing API returned an error".to_owned(),
             _ => "Syncthing is unavailable or its local TLS certificate could not be verified"
                 .to_owned(),
         })?;
@@ -250,6 +348,7 @@ impl Connection {
         }
         let mut bytes = Vec::new();
         response
+            .into_body()
             .into_reader()
             .take(MAX_RESPONSE + 1)
             .read_to_end(&mut bytes)
@@ -834,10 +933,7 @@ mod tests {
             stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"paused\":true}").unwrap();
         });
         let connection = Connection {
-            agent: ureq::AgentBuilder::new()
-                .try_proxy_from_env(false)
-                .timeout(Duration::from_secs(2))
-                .build(),
+            agent: api_agent(None, Duration::from_secs(2)),
             url: loopback_url(&address.to_string(), false).unwrap(),
             api_key: "fixture".into(),
             folders: vec![],
@@ -966,10 +1062,7 @@ mod tests {
             }
         });
         let connection = Connection {
-            agent: ureq::AgentBuilder::new()
-                .try_proxy_from_env(false)
-                .timeout(Duration::from_secs(2))
-                .build(),
+            agent: api_agent(None, Duration::from_secs(2)),
             url: loopback_url(&address.to_string(), false).unwrap(),
             api_key: "fixture".into(),
             folders: vec![],
@@ -1082,7 +1175,7 @@ mod tests {
             stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 14\r\nConnection: close\r\n\r\nfixture-secret").unwrap();
         });
         let connection = Connection {
-            agent: ureq::AgentBuilder::new().try_proxy_from_env(false).build(),
+            agent: api_agent(None, Duration::from_secs(5)),
             url: loopback_url(&address.to_string(), false).unwrap(),
             api_key: "fixture-secret".into(),
             folders: vec![],
@@ -1093,14 +1186,50 @@ mod tests {
         server.join().unwrap();
     }
     #[test]
+    fn redirects_are_never_followed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0; 2048];
+            let _ = stream.read(&mut buffer);
+            stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://192.0.2.1/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            // A followed redirect would need a second connection.
+            listener.set_nonblocking(true).unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            listener.accept().is_err()
+        });
+        let connection = Connection {
+            agent: api_agent(None, Duration::from_secs(2)),
+            url: loopback_url(&address.to_string(), false).unwrap(),
+            api_key: "fixture-secret".into(),
+            folders: vec![],
+        };
+        let error = connection.get("rest/db/status", &[]).unwrap_err();
+        assert!(error.contains("redirects are not followed"), "{error}");
+        assert!(server.join().unwrap());
+    }
+    #[test]
+    fn https_is_refused_without_a_pinned_certificate() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection {
+            agent: api_agent(None, Duration::from_secs(2)),
+            url: loopback_url(&listener.local_addr().unwrap().to_string(), true).unwrap(),
+            api_key: "fixture-secret".into(),
+            folders: vec![],
+        };
+        let error = connection.get("rest/db/status", &[]).unwrap_err();
+        assert!(
+            error.contains("certificate could not be verified"),
+            "{error}"
+        );
+    }
+    #[test]
     fn unavailable_and_pending_summary_are_honest() {
         let value = summary(&json!({"state":"idle","needTotalItems":4,"pullErrors":2}));
         assert_eq!((value.pending, value.errors), (4, 2));
         let connection = Connection {
-            agent: ureq::AgentBuilder::new()
-                .try_proxy_from_env(false)
-                .timeout(Duration::from_millis(100))
-                .build(),
+            agent: api_agent(None, Duration::from_millis(100)),
             url: loopback_url("127.0.0.1:1", false).unwrap(),
             api_key: "secret".into(),
             folders: vec![],

@@ -326,18 +326,7 @@ impl PluginService {
                 .installed
                 .get(&id)
                 .map(|record| record.directory.clone());
-            let response = ureq::AgentBuilder::new()
-                .timeout(Duration::from_secs(60))
-                .build()
-                .get(&entry.asset_url)
-                .call()
-                .map_err(|_| failure("Could not download the integration package"))?;
-            let mut bytes = Vec::new();
-            response
-                .into_reader()
-                .take(MAX_PACKAGE_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| failure("Integration download was interrupted"))?;
+            let bytes = download_package(&entry.asset_url)?;
             let _mutation = lock(&service.manager.mutations);
             let current_directory = lock(&service.manager.registry)
                 .installed
@@ -807,6 +796,29 @@ fn read_registry(root: &Path) -> ServiceResult<Registry> {
         }
     }
     Ok(registry)
+}
+
+fn download_package(url: &str) -> ServiceResult<Vec<u8>> {
+    // Same limits as the former ureq 2 defaults: 30 s connect, 60 s overall,
+    // at most four redirects, and no proxy from the environment.
+    let response = ureq::Agent::config_builder()
+        .proxy(None)
+        .max_redirects(4)
+        .timeout_connect(Some(Duration::from_secs(30)))
+        .timeout_global(Some(Duration::from_secs(60)))
+        .build()
+        .new_agent()
+        .get(url)
+        .call()
+        .map_err(|_| failure("Could not download the integration package"))?;
+    let mut bytes = Vec::new();
+    response
+        .into_body()
+        .into_reader()
+        .take(MAX_PACKAGE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| failure("Integration download was interrupted"))?;
+    Ok(bytes)
 }
 
 fn read_bounded(path: &Path, limit: u64) -> ServiceResult<Vec<u8>> {
@@ -1336,6 +1348,32 @@ fn main() {
         }).path()
     }
 
+    #[test]
+    fn package_download_follows_redirects_and_rejects_http_errors() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let responses = [
+                "HTTP/1.1 302 Found\r\nLocation: /asset\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\npackage",
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            ];
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        assert_eq!(
+            download_package(&format!("{base}/start")).unwrap(),
+            b"package"
+        );
+        let error = download_package(&base).unwrap_err();
+        assert_eq!(error.message, "Could not download the integration package");
+        server.join().unwrap();
+    }
     #[test]
     fn disabled_catalog_never_starts_or_installs_anything() {
         let root = tempfile::tempdir().unwrap();

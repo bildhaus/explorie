@@ -500,7 +500,7 @@ test('workflows block audits and publish the exact attested draft assets', async
   );
   assert.match(ci, /name: macOS GPUI Tests & Build[\s\S]*?runs-on: macos-latest/);
   const linuxJob = ci.match(/name: Linux Format, Clippy & Unix Safety Tests[\s\S]*?(?=\n  [a-z-]+:\n)/)?.[0] ?? '';
-  assert.match(linuxJob, /runs-on: ubuntu-latest/);
+  assert.match(linuxJob, /runs-on: ubuntu-24\.04/);
   assert.match(linuxJob, /pkg-config libasound2-dev/);
   assert.match(
     linuxJob,
@@ -833,7 +833,7 @@ test('CI keeps the GPUI application compiling on Linux', async () => {
 
   assert.match(
     ci,
-    /name: Linux Format, Clippy & Unix Safety Tests[\s\S]*?runs-on: ubuntu-latest[\s\S]*?libxkbcommon-x11-dev[\s\S]*?cargo clippy --locked --workspace --all-targets -- -D warnings/
+    /name: Linux Format, Clippy & Unix Safety Tests[\s\S]*?runs-on: ubuntu-24\.04[\s\S]*?libxkbcommon-x11-dev[\s\S]*?cargo clippy --locked --workspace --all-targets -- -D warnings/
   );
   assert.match(ci, /name: CI Gate[\s\S]*?needs: \[[^\]]*\blinux\b[^\]]*\][\s\S]*?"linux=\$LINUX"/);
 });

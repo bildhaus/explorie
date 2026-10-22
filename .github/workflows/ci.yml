@@ -69,7 +69,9 @@ jobs:
     name: Linux Format, Clippy & Unix Safety Tests
     needs: changes
     if: needs.changes.outputs.native == 'true'
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest now resolves to 26.04, whose packages.microsoft.com
+    # apt source intermittently returns 403 and fails `apt-get update` below.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
