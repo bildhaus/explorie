@@ -685,6 +685,11 @@ impl DirectoryWindow {
         let Some(mut editor) = self.remote.editor.take() else {
             return;
         };
+        // Next or Save may have been pressed from the keyboard, with the focus
+        // on its button. Whether the editor moves on to the next field or
+        // stays to have this one corrected, typing belongs in its field; once
+        // saved, the editor drops its field and the focus request with it.
+        self.text_input.focus_pending = true;
         let value = self.overlay.query.trim().to_string();
         match editor.field {
             RemoteEditorField::Name if value.is_empty() || value.chars().count() > 64 => {
@@ -1228,6 +1233,7 @@ impl DirectoryWindow {
                                 action,
                                 self.palette.control,
                             )
+                            .debug_selector(|| "commit-remote-profile-field".to_string())
                             .on_click(
                                 cx.listener(|this, _, _, cx| this.commit_remote_editor_field(cx)),
                             ),

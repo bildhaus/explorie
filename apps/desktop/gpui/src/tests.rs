@@ -11783,6 +11783,156 @@ fn the_remote_editor_field_takes_focus_back_when_clicked(cx: &mut TestAppContext
     remove_fixture(&root);
 }
 
+/// Found on a real machine: clicking Next in the profile editor left the
+/// keyboard focus on the button, so the next field's typing went to the file
+/// list behind the dialog and changed its selection.
+#[gpui::test]
+fn the_remote_editor_field_keeps_focus_after_next_is_clicked(cx: &mut TestAppContext) {
+    let root = fixture_dir();
+    fs::write(root.join("alpha.txt"), "a").unwrap();
+    fs::write(root.join("beta.txt"), "b").unwrap();
+    let backend = Arc::new(FakeGpuiRemoteBackend::default());
+    let services = NativeServices::with_remote_backend(
+        ResourcePaths::test(&root),
+        Arc::clone(&backend) as Arc<dyn RemoteDriveBackend>,
+    );
+    let (view, window) =
+        cx.add_window_view(|_, cx| DirectoryWindow::restore(root.clone(), false, services, cx));
+    window.simulate_resize(gpui::size(px(1024.0), px(768.0)));
+    view.update(window, |view, cx| view.open_remote_drive_manager(cx));
+    wait_for_view(&view, window, "the remote environment", |view| {
+        view.remote.environment.is_some()
+    });
+    view.update(window, |view, cx| {
+        view.install_shortcut_bindings(cx);
+        view.remote.environment = Some(remote_test_environment("enabled"));
+        view.remote.available = vec!["cloud".to_string()];
+        view.open_remote_profile_editor(None, cx);
+    });
+    window.run_until_parked();
+    let input_focus = view.read_with(window, |view, _| view.text_input.focus.clone().unwrap());
+    let type_text = |window: &mut gpui::VisualTestContext, text: &str| {
+        for character in text.chars() {
+            window.update(|window, cx| {
+                window.dispatch_keystroke(
+                    Keystroke::parse(&character.to_string())
+                        .unwrap()
+                        .with_simulated_ime(),
+                    cx,
+                );
+            });
+        }
+        window.run_until_parked();
+    };
+    type_text(window, "Office");
+
+    for (step, typed) in [
+        (RemoteEditorField::Remote, "x"),
+        (RemoteEditorField::RemotePath, "docs"),
+    ] {
+        let next = window
+            .debug_bounds("commit-remote-profile-field")
+            .expect("the Next button renders");
+        window.simulate_click(next.center(), gpui::Modifiers::default());
+        window.run_until_parked();
+        view.read_with(window, |view, _| {
+            assert_eq!(view.remote.editor.as_ref().unwrap().field, step);
+        });
+        assert!(
+            window.update(|window, _| input_focus.is_focused(window)),
+            "{step:?} starts focused after Next is clicked"
+        );
+        if step == RemoteEditorField::Remote {
+            // The remote step starts with the only configured remote.
+            view.read_with(window, |view, _| assert_eq!(view.overlay.query, "cloud"));
+            continue;
+        }
+        type_text(window, typed);
+        view.read_with(window, |view, _| {
+            assert_eq!(view.overlay.query, typed);
+            assert!(
+                view.effective_selection_count() == 0,
+                "typing reached the file list behind the dialog"
+            );
+        });
+    }
+    remove_fixture(&root);
+}
+
+/// The archive dialog's buttons took the focus the same way: after clicking
+/// Format or Next, typing went to the file list instead of the field.
+#[gpui::test]
+fn the_archive_dialog_field_keeps_focus_after_its_buttons_are_clicked(cx: &mut TestAppContext) {
+    let root = fixture_dir();
+    fs::write(root.join("alpha.txt"), "a").unwrap();
+    fs::write(root.join("beta.txt"), "b").unwrap();
+    let services = NativeServices::new(ResourcePaths::test(&root));
+    let (view, window) =
+        cx.add_window_view(|_, cx| DirectoryWindow::new(root.clone(), services, cx));
+    window.simulate_resize(gpui::size(px(1024.0), px(768.0)));
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        view.install_shortcut_bindings(cx);
+        view.prompt_create_archive_from_paths(vec![root.join("alpha.txt")], cx);
+    });
+    window.run_until_parked();
+    let input_focus = view.read_with(window, |view, _| view.text_input.focus.clone().unwrap());
+    let field_focused = |window: &mut gpui::VisualTestContext| {
+        window.update(|window, _| input_focus.is_focused(window))
+    };
+    let type_text = |window: &mut gpui::VisualTestContext, text: &str| {
+        for character in text.chars() {
+            window.update(|window, cx| {
+                window.dispatch_keystroke(
+                    Keystroke::parse(&character.to_string())
+                        .unwrap()
+                        .with_simulated_ime(),
+                    cx,
+                );
+            });
+        }
+        window.run_until_parked();
+    };
+    let prompt_input = |view: &Entity<DirectoryWindow>, window: &mut gpui::VisualTestContext| {
+        view.read_with(window, |view, _| {
+            view.mutation.prompt.as_ref().unwrap().input.clone()
+        })
+    };
+    assert!(field_focused(window), "the archive name starts focused");
+
+    let format = window.debug_bounds("archive-format").unwrap();
+    window.simulate_click(format.center(), gpui::Modifiers::default());
+    window.run_until_parked();
+    assert!(field_focused(window), "the name keeps focus after Format");
+    let before = prompt_input(&view, window);
+    type_text(window, "z");
+    assert_eq!(prompt_input(&view, window), format!("{before}z"));
+
+    let next = window.debug_bounds("mutation-prompt-submit").unwrap();
+    window.simulate_click(next.center(), gpui::Modifiers::default());
+    window.run_until_parked();
+    view.read_with(window, |view, _| {
+        assert!(matches!(
+            view.mutation.prompt.as_ref().unwrap().kind,
+            MutationPromptKind::ArchivePassword { .. }
+        ));
+    });
+    assert!(
+        field_focused(window),
+        "the password starts focused after Next"
+    );
+    type_text(window, "pw");
+    assert_eq!(prompt_input(&view, window), "pw");
+    view.read_with(window, |view, _| {
+        assert_eq!(
+            view.effective_selection_count(),
+            0,
+            "typing reached the file list behind the dialog"
+        );
+    });
+    remove_fixture(&root);
+}
+
 /// Found on a real machine: pressing Escape in a profile editor opened with
 /// Edit, with nothing changed, asked to discard unsaved changes.
 #[gpui::test]

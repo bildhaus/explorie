@@ -87,6 +87,11 @@ impl DirectoryWindow {
     }
 
     pub(crate) fn submit_mutation_prompt(&mut self, cx: &mut Context<Self>) {
+        // The dialog's button may have been pressed from the keyboard, with
+        // the focus on it. A prompt that stays open, or moves on to its next
+        // step in the same field, keeps the typing in that field; one that
+        // closes drops its field, and the focus request with it.
+        self.text_input.focus_pending = true;
         if self.undo_ledger.is_processing()
             || self.mutation.in_progress
             || self.operations.active_count() > 0
