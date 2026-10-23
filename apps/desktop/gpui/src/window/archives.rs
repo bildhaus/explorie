@@ -121,6 +121,9 @@ impl DirectoryWindow {
     }
 
     pub(crate) fn cycle_archive_format(&mut self, cx: &mut Context<Self>) {
+        // Pressed from the keyboard, its button has the focus; the name field
+        // takes it back.
+        self.text_input.focus_pending = true;
         let Some(MutationPrompt {
             kind:
                 MutationPromptKind::ArchiveName {
@@ -150,6 +153,9 @@ impl DirectoryWindow {
     }
 
     pub(crate) fn cycle_archive_compression(&mut self, cx: &mut Context<Self>) {
+        // Pressed from the keyboard, its button has the focus; the name field
+        // takes it back.
+        self.text_input.focus_pending = true;
         let Some(MutationPrompt {
             kind:
                 MutationPromptKind::ArchiveName {

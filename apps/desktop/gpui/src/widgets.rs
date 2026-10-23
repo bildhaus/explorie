@@ -151,6 +151,11 @@ pub(crate) fn toolbar_button_enabled(
             button
                 .focusable()
                 .tab_stop(true)
+                // Like a macOS button, a click does not take the keyboard
+                // focus: a dialog's text field keeps it, so its typing does
+                // not go to the file list behind the dialog. Tab still
+                // reaches the button.
+                .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                 .hover(move |button| button.bg(adaptive_hover(color)))
                 .focus_visible(move |button| {
                     button
