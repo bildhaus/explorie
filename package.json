@@ -7,7 +7,7 @@
   "repository": "https://github.com/bildhaus/explorie",
   "license": "MIT",
   "engines": {
-    "node": ">=20",
+    "node": ">=22.23.4 <23 || >=24.22.1 <25",
     "pnpm": ">=9"
   },
   "scripts": {

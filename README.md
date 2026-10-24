@@ -53,7 +53,7 @@ Current features:
 
 | Dependency  | Version               | Installation                                                           |
 | ----------- | --------------------- | ---------------------------------------------------------------------- |
-| **Node.js** | 20.x LTS              | [nodejs.org](https://nodejs.org) or `winget install OpenJS.NodeJS.LTS` |
+| **Node.js** | 22.23.4+ (22.x) or 24.22.1+ (24.x)              | [nodejs.org](https://nodejs.org) or `winget install OpenJS.NodeJS.LTS` |
 | **pnpm**    | 9.x                   | `npm install -g pnpm` or `corepack enable`                             |
 | **Rust**    | 1.98.0 (2024 edition) | [rustup.rs](https://rustup.rs)                                         |
 

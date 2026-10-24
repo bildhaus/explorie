@@ -451,7 +451,7 @@ test('workflows block audits and publish the exact attested draft assets', async
   assert.doesNotMatch(ci, /playwright|vite|explorie-desktop|test-frontend|test-e2e/i);
   assert.doesNotMatch(ci, /audit[^\n]*\|\| true/);
   assert.match(ci, /pnpm audit --audit-level=moderate/);
-  assert.match(ci, /name: Security Audit[\s\S]*?node-version: '24\.19\.0'/);
+  assert.match(ci, /name: Security Audit[\s\S]*?node-version: '24\.22\.1'/);
   assert.match(ci, /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
   assert.match(ci, /name: CI Gate/);
   // Coverage runs in its own push-only workflow, so it gates neither merges
@@ -520,7 +520,7 @@ test('workflows block audits and publish the exact attested draft assets', async
     release,
     /name: Validate release source[\s\S]*?runs-on: windows-latest[\s\S]*?timeout-minutes: 10/
   );
-  assert.match(release, /name: Validate release source[\s\S]*?node-version: '24\.19\.0'/);
+  assert.match(release, /name: Validate release source[\s\S]*?node-version: '24\.22\.1'/);
   assert.match(
     release,
     /name: Validate release source[\s\S]*?name: Setup pnpm[\s\S]*?pnpm\/action-setup@[0-9a-f]{40}[\s\S]*?name: Setup Node\.js/
