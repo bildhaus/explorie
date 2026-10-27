@@ -2216,7 +2216,7 @@ version = "0.0.1"
 dependencies = [
  "dirs 7.0.0",
  "explorie-plugin-protocol",
- "roxmltree 0.20.0",
+ "roxmltree 0.21.1",
  "rustls",
  "serde_json",
  "tempfile",
