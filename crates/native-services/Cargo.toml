@@ -75,7 +75,7 @@ winreg = "0.52"
 cc = "1"
 
 [dev-dependencies]
-pollster = "0.2.5"
+pollster = "0.4.0"
 tempfile = "3.9"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]

@@ -63,7 +63,7 @@ ico = "0.5.0"
 
 [dev-dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "76659a55a8c10ed355a070f8764a0b1733e3c115", default-features = false, features = ["test-support"] }
-pollster = "0.2.5"
+pollster = "0.4.0"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "76659a55a8c10ed355a070f8764a0b1733e3c115", features = ["font-kit", "test-support"] }
