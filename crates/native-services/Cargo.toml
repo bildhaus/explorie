@@ -57,7 +57,7 @@ serde_json = "1.0"
 sha2 = "0.10"
 semver = "1"
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "regex-fancy"] }
-sysinfo = "0.30.5"
+sysinfo = "0.31.4"
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 uuid = { version = "1.8", features = ["v4"] }
