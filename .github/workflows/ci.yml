@@ -88,7 +88,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: './ -> target'
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -159,7 +159,7 @@ jobs:
           components: clippy
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: './ -> target'
           # Shared with build-release.yml so tagged releases restore main's cache.
@@ -261,7 +261,7 @@ jobs:
           components: clippy
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: './ -> target'
           # Shared with build-release.yml so tagged releases restore main's cache.
@@ -333,7 +333,7 @@ jobs:
           toolchain: 1.98.0
 
       - name: Rust dependency cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: './ -> target'
           cache-targets: false
