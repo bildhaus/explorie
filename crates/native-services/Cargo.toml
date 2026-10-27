@@ -38,7 +38,7 @@ explorie-plugin-protocol = { path = "../plugin-protocol" }
 fontdue = { version = "0.9.4", optional = true }
 html2text = "0.17.1"
 image = { version = "0.25.1", default-features = false, features = ["bmp", "dds", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
-hayro-syntax = "=0.7.2"
+hayro-syntax = "=0.8.0"
 karet-pdf = "=0.5.0"
 mail-parser = { version = "0.11.8", optional = true }
 minisign-verify = "0.3"
