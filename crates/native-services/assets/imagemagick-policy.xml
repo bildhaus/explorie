@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Explorie ImageMagick security policy.
+
+  Explorie only asks ImageMagick to decode a handful of camera and modern image
+  formats (always with an explicit coder prefix) and to write PNG. Everything
+  else is denied so a hostile file cannot reach Ghostscript, MVG/MSL scripting,
+  URL fetchers, text renderers or indirect "@file" reads. Explorie writes this
+  file into its own cache and points MAGICK_CONFIGURE_PATH at it; the command
+  line repeats the resource limits with -limit.
+-->
+<policymap>
+  <policy domain="resource" name="memory" value="256MiB"/>
+  <policy domain="resource" name="map" value="512MiB"/>
+  <policy domain="resource" name="disk" value="1GiB"/>
+  <policy domain="resource" name="area" value="128MP"/>
+  <policy domain="resource" name="width" value="16KP"/>
+  <policy domain="resource" name="height" value="16KP"/>
+  <policy domain="resource" name="list-length" value="16"/>
+  <policy domain="resource" name="time" value="60"/>
+  <policy domain="system" name="max-memory-request" value="256MiB"/>
+
+  <policy domain="delegate" rights="none" pattern="*"/>
+  <policy domain="filter" rights="none" pattern="*"/>
+  <policy domain="path" rights="none" pattern="@*"/>
+  <policy domain="module" rights="none" pattern="{PS,PS2,PS3,EPS,EPI,EPSF,EPSI,EPT,PDF,PDFA,XPS,MVG,MSL,SVG,MSVG,RSVG,TEXT,TXT,LABEL,CAPTION,PANGO,URL,HTTP,HTTPS,FTP,EPHEMERAL,SHOW,WIN,X,VID,PLASMA,INLINE}"/>
+  <policy domain="coder" rights="none" pattern="*"/>
+  <policy domain="coder" rights="read" pattern="{HEIC,HEIF,AVIF,JXL,PSD,DNG,CR2,CR3,NEF,ARW,ORF,RW2,RAF}"/>
+  <policy domain="coder" rights="write" pattern="PNG"/>
+</policymap>

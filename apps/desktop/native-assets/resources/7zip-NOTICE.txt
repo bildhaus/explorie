@@ -1,0 +1,24 @@
+Explorie includes the unmodified 7-Zip 26.03 command-line engine.
+7-Zip Copyright (C) 1999-2026 Igor Pavlov.
+Project: https://www.7-zip.org/
+
+7-Zip is distributed under GNU LGPL version 2.1 or later, with BSD-2-Clause,
+BSD-3-Clause and the unRAR restriction for portions of its code. See the
+accompanying 7zip-LICENSE.txt and 7zip-COPYING.txt for the complete terms.
+RAR support is for decompression; the unRAR sources must not be used to
+develop a RAR (WinRAR) compatible archiver.
+
+The exact upstream corresponding source, including upstream build scripts,
+is included as 7z2603-src.tar.xz beside this notice in each Explorie installer:
+Windows: licenses/7z2603-src.tar.xz beside Explorie.exe.
+macOS: explorie.app/Contents/Resources/licenses/7z2603-src.tar.xz
+(Finder: Show Package Contents). The archive can be copied and extracted
+with standard archive tools, including the bundled 7-Zip executable.
+Upstream source: https://github.com/ip7z/7zip/releases/download/26.03/7z2603-src.tar.xz
+Source SHA-256: 9cbde5099c6deb73691b0579063da5827522ccbbcba3f0020fd04e8c8c16c0d4
+
+Explorie communicates with the separately replaceable 7-Zip executable using
+its command-line interface. No 7-Zip source changes are made. Windows uses
+7zip/7z.exe and 7zip/7z.dll beside Explorie.exe; macOS uses
+explorie.app/Contents/Resources/7zip/7zz. macOS distribution code-signs the
+upstream executable as part of the app bundle; it does not change its code.

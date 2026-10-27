@@ -1,0 +1,6 @@
+# cargo-audit configuration (PR CI and the Scheduled Security Audit run plain
+# `cargo audit`). Every ignore needs a reason and should be removed as soon as
+# the dependency graph no longer needs it.
+
+[advisories]
+ignore = []

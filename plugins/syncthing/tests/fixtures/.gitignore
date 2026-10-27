@@ -1,0 +1,4 @@
+# Explicitly public, test-only TLS identities (see README.md).
+!localhost-cert.pem
+!localhost-key.pem
+!wrong-cert.pem

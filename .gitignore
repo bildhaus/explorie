@@ -1,0 +1,103 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+ehthumbs.db
+*.swp
+*.swo
+*.tmp
+AGENTS.md
+PRD.md
+pixarticons.md
+
+# Env files
+.env
+.env.local
+.env.*.local
+.envrc
+
+# Signing / notarization secrets
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+*.key
+*.pem
+*.p8
+*.keychain
+*.keychain-db
+AuthKey_*.p8
+secrets/
+.appstoreconnect/private_keys/
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# Logs
+*.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# Node / Frontend
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/build/
+out/
+.next/
+.nuxt/
+.cache/
+**/.cache/
+.vite/
+**/.vite/
+.turbo/
+**/.turbo/
+.eslintcache
+
+# Rust
+target/
+**/target/
+
+**/target/**/bundle/
+apps/desktop/native-assets/binaries/7zip-*/
+apps/desktop/native-assets/binaries/rclone-*
+
+# Tests / Coverage
+.release-checks/
+release-artifacts/
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+.playwright/
+lcov.info
+
+# Binaries (safety)
+*.exe
+*.dll
+*.so
+*.dylib
+*.app
+*.AppImage
+*.dmg
+*.msi
+*.deb
+*.rpm
+*.zip
+
+# Lock files (keep Cargo.lock and pnpm-lock.yaml, ignore others)
+package-lock.json
+yarn.lock
+
+.claude/

@@ -1,0 +1,58 @@
+# cargo-fuzz targets for parsers that see untrusted input. Standalone on
+# purpose (and listed in the root workspace `exclude`): it builds with nightly
+# and sanitizer flags, and must never enter the product build.
+#
+#   rustup toolchain install nightly && cargo install cargo-fuzz
+#   cp Cargo.lock fuzz/Cargo.lock   # fuzz the dependency versions that ship
+#   cargo +nightly fuzz run sevenzip_listing -- -max_total_time=60
+#
+# Without nightly, `cargo check --manifest-path fuzz/Cargo.toml --bins` still
+# type-checks every target on the stable toolchain.
+[package]
+name = "explorie-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+explorie-core = { path = "../crates/core" }
+explorie-plugin-protocol = { path = "../crates/plugin-protocol" }
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "sevenzip_listing"
+path = "fuzz_targets/sevenzip_listing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "archive_entry_path"
+path = "fuzz_targets/archive_entry_path.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "explorie_metadata"
+path = "fuzz_targets/explorie_metadata.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plugin_frames"
+path = "fuzz_targets/plugin_frames.rs"
+test = false
+doc = false
+bench = false

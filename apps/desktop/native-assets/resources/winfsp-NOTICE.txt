@@ -1,0 +1,5 @@
+WinFsp - Windows File System Proxy
+Copyright (C) Bill Zissimopoulos
+
+Explorie redistributes the official, unmodified WinFsp installer.
+Source and license: https://github.com/winfsp/winfsp
