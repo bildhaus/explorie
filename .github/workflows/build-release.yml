@@ -85,8 +85,11 @@ jobs:
             echo "Release $GITHUB_REF_NAME already exists; refusing to replace it."
             exit 1
           fi
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$PUBLISH" = "true" ] && [ "$state" != "true" ]; then
-            echo "Release $GITHUB_REF_NAME must exist as a draft before publication."
+          # This job's read-only token cannot see drafts, so a draft reads as
+          # missing here. The publish job, which can, checks that the release
+          # is still the exact draft before publishing it.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$PUBLISH" = "true" ] && [ "$state" = "false" ]; then
+            echo "Release $GITHUB_REF_NAME is already published."
             exit 1
           fi
 

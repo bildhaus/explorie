@@ -638,7 +638,9 @@ test('workflows block audits and publish the exact attested draft assets', async
   assert.match(release, /environment: release-publish/);
   assert.match(release, /if: github\.ref_type == 'tag'/);
   assert.match(release, /Release .* already exists; refusing to replace it/);
-  assert.match(release, /must exist as a draft before publication/);
+  // A read-only token cannot see drafts; only the publish job checks the draft.
+  assert.match(release, /Release \$GITHUB_REF_NAME is already published/);
+  assert.doesNotMatch(release, /must exist as a draft before publication/);
   assert.match(release, /explorie-\$version-windows-x64-setup-unsigned\.exe/);
   assert.doesNotMatch(release, /windows-x64-portable/);
   assert.match(release, /Stage unsigned Windows installer and checksum/);
