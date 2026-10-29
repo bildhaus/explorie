@@ -726,6 +726,8 @@ test('supply-chain policy runs on every PR and advisories are rechecked weekly',
   assert.match(audit, /cargo deny --locked check advisories/);
   assert.doesNotMatch(audit, /uses:[^\n]+@(v\d+|stable|cargo-)/);
   assert.match(dependabot, /package-ecosystem: cargo[\s\S]*?update-types:[\s\S]*?- minor[\s\S]*?- patch/);
+  // Actions are allow-listed by exact commit, so they are bumped by hand with the allow-list.
+  assert.doesNotMatch(dependabot, /package-ecosystem: github-actions/);
   for (const crate of ['gpui', 'gpui_platform', 'gpui_windows']) {
     assert.match(dependabot, new RegExp(`dependency-name: ${crate}\\n`));
   }

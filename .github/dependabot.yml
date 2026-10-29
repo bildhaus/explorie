@@ -1,12 +1,10 @@
 version: 2
 
+# GitHub Actions are not updated here: the repository's Actions allow-list
+# names each action by its exact commit, so a bumped action cannot start until
+# the allow-list is updated with it. Bump actions by hand, together with the
+# allow-list.
 updates:
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-
   - package-ecosystem: cargo
     directory: /
     schedule:
